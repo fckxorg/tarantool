@@ -29,7 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <string.h>
 #include <time.h>
 
 #include "trivia/util.h"
@@ -143,3 +142,14 @@ datetime_to_string(const struct datetime *date, char *buf, uint32_t len)
 	}
 	return (buf - src);
 }
+
+int
+datetime_compare(const struct datetime *lhs, const struct datetime *rhs)
+{
+	int result = COMPARE_RESULT(lhs->secs, rhs->secs);
+	if (result != 0)
+		return result;
+
+	return COMPARE_RESULT(lhs->nsec, rhs->nsec);
+}
+

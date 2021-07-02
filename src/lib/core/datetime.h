@@ -71,6 +71,26 @@ struct datetime_interval {
 };
 
 /**
+ * Compare arguments of a datetime type
+ * @param lhs left datetime argument
+ * @param rhs right datetime argument
+ * @retval < 0 if lhs less than rhs
+ * @retval = 0 if lhs and rhs equal
+ * @retval > 0 if lhs greater than rhs
+ */
+int
+datetime_compare(const struct datetime *lhs, const struct datetime *rhs);
+
+/**
+ * Convert datetime to string using default format
+ * @param date source datetime value
+ * @param buf output character buffer
+ * @param len size ofoutput buffer
+ */
+int
+datetime_to_string(const struct datetime *date, char *buf, uint32_t len);
+
+/**
  * Convert datetime to string using default asctime format
  * "Sun Sep 16 01:03:52 1973\n\0"
  * @param date source datetime value
