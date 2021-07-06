@@ -31,6 +31,8 @@ include_files = {
 exclude_files = {
     "build/**/*.lua",
     "test-run/test/test-tarantool/*.test.lua",
+    "test-run/checks/*",
+    "test-run/luatest/*",
     "test/app/*.test.lua",
     "test/box/*.test.lua",
     "test/engine/*.test.lua",
@@ -110,6 +112,12 @@ files["test/swim/box.lua"] = {
     }
 }
 files["test/replication/replica_quorum.lua"] = {
+    globals = {
+        "INSTANCE_URI",
+        "nonexistent_uri",
+    },
+}
+files["test/instance_files/replica_quorum.lua"] = {
     globals = {
         "INSTANCE_URI",
         "nonexistent_uri",
