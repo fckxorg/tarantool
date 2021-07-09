@@ -103,6 +103,8 @@ struct gap_item {
 	enum iterator_type type;
 	/** Storage for short key. @key may point here. */
 	char short_key[16];
+	/** Flag indicating if this item must not be split. */
+	bool is_dontsplit;
 };
 
 /**
@@ -1026,7 +1028,7 @@ check_dup_dirty(struct txn_stmt *stmt, struct tuple *new_tuple,
 
 static struct gap_item *
 memtx_tx_gap_item_new(struct txn *txn, enum iterator_type type,
-		      const char *key, uint32_t part_count);
+		      const char *key, uint32_t part_count, bool is_dontsplit);
 
 /**
  * Handle insertion to a new place in index. There can be readers which
@@ -1083,7 +1085,7 @@ memtx_tx_handle_gap_write(struct txn *txn, struct space *space,
 			}
 		}
 
-		if (is_split) {
+		if (!item->is_dontsplit && is_split) {
 			/*
 			 * The insertion divided the gap into two parts.
 			 * Old tracker is left in one gap, let's copy tracker
@@ -1092,7 +1094,8 @@ memtx_tx_handle_gap_write(struct txn *txn, struct space *space,
 			struct gap_item *copy =
 				memtx_tx_gap_item_new(item->txn, item->type,
 						      item->key,
-						      item->part_count);
+						      item->part_count,
+						      item->is_dontsplit);
 			if (copy == NULL)
 				return -1;
 
@@ -1827,7 +1830,7 @@ memtx_tx_track_point_slow(struct txn *txn, struct index *index, const char *key)
 
 static struct gap_item *
 memtx_tx_gap_item_new(struct txn *txn, enum iterator_type type,
-		      const char *key, uint32_t part_count)
+		      const char *key, uint32_t part_count, bool is_dontsplit)
 {
 	struct gap_item *item = (struct gap_item *)
 		mempool_alloc(&txm.gap_item_mempoool);
@@ -1857,6 +1860,7 @@ memtx_tx_gap_item_new(struct txn *txn, enum iterator_type type,
 		}
 	}
 	memcpy((char *)item->key, key, item->key_len);
+	item->is_dontsplit = is_dontsplit;
 	rlist_add(&txn->gap_list, &item->in_gap_list);
 	return item;
 }
@@ -1873,13 +1877,13 @@ memtx_tx_gap_item_new(struct txn *txn, enum iterator_type type,
 int
 memtx_tx_track_gap_slow(struct txn *txn, struct space *space, struct index *index,
 			struct tuple *successor, enum iterator_type type,
-			const char *key, uint32_t part_count)
+			const char *key, uint32_t part_count, bool is_dontsplit)
 {
 	if (txn->status != TXN_INPROGRESS)
 		return 0;
 
 	struct gap_item *item = memtx_tx_gap_item_new(txn, type, key,
-						      part_count);
+						      part_count, is_dontsplit);
 	if (item == NULL)
 		return -1;
 

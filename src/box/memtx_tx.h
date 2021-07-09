@@ -299,12 +299,12 @@ memtx_tx_track_point(struct txn *txn, struct space *space,
 }
 
 /**
- * Helper of memtx_tx_track_gap.
+ * Helper of memtx_tx_track_gap_ex.
  */
 int
 memtx_tx_track_gap_slow(struct txn *txn, struct space *space, struct index *index,
 			struct tuple *successor, enum iterator_type type,
-			const char *key, uint32_t part_count);
+			const char *key, uint32_t part_count, bool is_dontsplit);
 
 /**
  * Record in TX manager that a transaction @a txn have read nothing
@@ -316,9 +316,9 @@ memtx_tx_track_gap_slow(struct txn *txn, struct space *space, struct index *inde
  * @return 0 on success, -1 on memory error.
  */
 static inline int
-memtx_tx_track_gap(struct txn *txn, struct space *space, struct index *index,
-		   struct tuple *successor, enum iterator_type type,
-		   const char *key, uint32_t part_count)
+memtx_tx_track_gap_ex(struct txn *txn, struct space *space, struct index *index,
+		      struct tuple *successor, enum iterator_type type,
+		      const char *key, uint32_t part_count, bool is_dontsplit)
 {
 	if (!memtx_tx_manager_use_mvcc_engine)
 		return 0;
@@ -328,7 +328,19 @@ memtx_tx_track_gap(struct txn *txn, struct space *space, struct index *index,
 	if (space == NULL || space->def->id == 0)
 		return 0;
 	return memtx_tx_track_gap_slow(txn, space, index, successor,
-				       type, key, part_count);
+				       type, key, part_count, is_dontsplit);
+}
+
+/**
+ * Wrapper for the memtx_tx_track_gap_ex with default flag values.
+ */
+static inline int
+memtx_tx_track_gap(struct txn *txn, struct space *space, struct index *index,
+		   struct tuple *successor, enum iterator_type type,
+		   const char *key, uint32_t part_count)
+{
+	return memtx_tx_track_gap_ex(txn, space, index, successor,
+				     type, key, part_count, false);
 }
 
 /**
