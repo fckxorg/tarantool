@@ -424,6 +424,8 @@ struct txn {
 	struct rlist gap_list;
 	/** Link in tx_manager::all_txs. */
 	struct rlist in_all_txs;
+	/** True in case transaction provides any DDL change. */
+	bool is_schema_changed;
 };
 
 static inline bool

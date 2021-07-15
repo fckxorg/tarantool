@@ -57,6 +57,7 @@
 #include "sequence.h"
 #include "sql.h"
 #include "constraint_id.h"
+#include "memtx_tx.h"
 
 /* {{{ Auxiliary functions and methods. */
 
@@ -2500,6 +2501,10 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		}
 		alter_guard.is_active = false;
 	}
+	/*
+	 * After cache modification transaction is now allowed to yield.
+	 */
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -2829,6 +2834,7 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 		return -1;
 	}
 	scoped_guard.is_active = false;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -2918,6 +2924,7 @@ on_replace_dd_truncate(struct trigger * /* trigger */, void *event)
 		return -1;
 	}
 	scoped_guard.is_active = false;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -3210,6 +3217,7 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 			return -1;
 		txn_stmt_on_rollback(stmt, on_rollback);
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -3584,6 +3592,7 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 			return -1;
 		}
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -3812,6 +3821,7 @@ on_replace_dd_collation(struct trigger * /* trigger */, void *event)
 		diag_set(ClientError, ER_UNSUPPORTED, "collation", "alter");
 		return -1;
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4134,6 +4144,7 @@ on_replace_dd_priv(struct trigger * /* trigger */, void *event)
 			return -1;
 		txn_stmt_on_rollback(stmt, on_rollback);
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4172,6 +4183,7 @@ on_replace_dd_schema(struct trigger * /* trigger */, void *event)
 		REPLICASET_UUID = uu;
 		say_info("cluster uuid %s", tt_uuid_str(&uu));
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4304,6 +4316,7 @@ on_replace_dd_cluster(struct trigger *trigger, void *event)
 			return -1;
 		txn_stmt_on_commit(stmt, on_commit);
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4527,6 +4540,7 @@ on_replace_dd_sequence(struct trigger * /* trigger */, void *event)
 	def_guard.is_active = false;
 	if (trigger_run(&on_alter_sequence, seq) != 0)
 		return -1;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4591,6 +4605,7 @@ on_replace_dd_sequence_data(struct trigger * /* trigger */, void *event)
 		txn_stmt_on_rollback(stmt, on_rollback);
 		sequence_reset(seq);
 	}
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4807,6 +4822,7 @@ on_replace_dd_space_sequence(struct trigger * /* trigger */, void *event)
 	}
 	if (trigger_run(&on_alter_space, space) != 0)
 		return -1;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -4982,6 +4998,7 @@ on_replace_dd_trigger(struct trigger * /* trigger */, void *event)
 	txn_stmt_on_rollback(stmt, on_rollback);
 	txn_stmt_on_commit(stmt, on_commit);
 	++schema_version;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -5509,6 +5526,7 @@ on_replace_dd_fk_constraint(struct trigger * /* trigger*/, void *event)
 		space_reset_fk_constraint_mask(parent_space);
 	}
 	++schema_version;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -5698,6 +5716,7 @@ on_replace_dd_ck_constraint(struct trigger * /* trigger*/, void *event)
 				old_def->is_enabled = ck_def->is_enabled;
 				if (trigger_run(&on_alter_space, space) != 0)
 					return -1;
+				memtx_tx_acquire_ddl(txn);
 				return 0;
 			}
 		}
@@ -5765,6 +5784,7 @@ on_replace_dd_ck_constraint(struct trigger * /* trigger*/, void *event)
 	if (trigger_run(&on_alter_space, space) != 0)
 		return -1;
 	++schema_version;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
@@ -5840,8 +5860,10 @@ on_replace_dd_func_index(struct trigger *trigger, void *event)
 	 * Index is already initialized for corresponding
 	 * function. Index rebuild is not required.
 	 */
-	if (index_def_get_func(index->def) == func)
+	if (index_def_get_func(index->def) == func) {
+		memtx_tx_acquire_ddl(txn);
 		return 0;
+	}
 
 	alter = alter_space_new(space);
 	if (alter == NULL)
@@ -5866,6 +5888,7 @@ on_replace_dd_func_index(struct trigger *trigger, void *event)
 	}
 
 	scoped_guard.is_active = false;
+	memtx_tx_acquire_ddl(txn);
 	return 0;
 }
 
