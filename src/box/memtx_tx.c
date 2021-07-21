@@ -420,88 +420,39 @@ memtx_tx_story_get(struct tuple *tuple)
 }
 
 /**
- * Create a new story of a @a tuple that was added by @a stmt.
- * @return story on success, NULL on error (diag is set).
+ * Link that @a story was added by @a stmt.
  */
-static struct memtx_story *
-memtx_tx_story_new_add_stmt(struct tuple *tuple, struct txn_stmt *stmt)
+static void
+memtx_tx_story_link_added_by(struct memtx_story *story,
+			     struct txn_stmt *stmt)
 {
-	struct memtx_story *res = memtx_tx_story_new(stmt->space, tuple);
-	if (res == NULL)
-		return NULL;
-	res->add_stmt = stmt;
+	assert(story->add_stmt == NULL);
 	assert(stmt->add_story == NULL);
-	stmt->add_story = res;
-	return res;
+	story->add_stmt = stmt;
+	stmt->add_story = story;
 }
 
 /**
- * Create a new story of a @a tuple that was deleted by @a stmt.
- * @return story on success, NULL on error (diag is set).
- */
-static struct memtx_story *
-memtx_tx_story_new_del_stmt(struct tuple *tuple, struct txn_stmt *stmt)
-{
-	struct memtx_story *res = memtx_tx_story_new(stmt->space, tuple);
-	if (res == NULL)
-		return NULL;
-	res->del_stmt = stmt;
-	assert(stmt->del_story == NULL);
-	stmt->del_story = res;
-	return res;
-}
-
-/**
- * Undo memtx_tx_story_new_add_stmt.
+ * Unlink that @a story from @a stmt which added it.
+ * Effectively undo memtx_tx_story_link_added_by.
  */
 static void
-memtx_tx_story_delete_add_stmt(struct memtx_story *story)
+memtx_tx_story_unlink_added_by(struct memtx_story *story,
+			       struct txn_stmt *stmt)
 {
-	story->add_stmt->add_story = NULL;
+	assert(stmt->add_story == story);
+	assert(story->add_stmt == stmt);
+	stmt->add_story = NULL;
 	story->add_stmt = NULL;
-	memtx_tx_story_delete(story);
 }
 
 /**
- * Undo memtx_tx_story_new_del_stmt.
+ * Link that @a story was deleted by @a stmt.
  */
 static void
-memtx_tx_story_delete_del_stmt(struct memtx_story *story)
+memtx_tx_story_link_deleted_by(struct memtx_story *story,
+			       struct txn_stmt *stmt)
 {
-	story->del_stmt->del_story = NULL;
-	story->del_stmt = NULL;
-	memtx_tx_story_delete(story);
-}
-
-/**
- * Link a @a story with @a older_story in @a index (in both directions).
- * @a older_story is allowed to be NULL.
- */
-static void
-memtx_tx_story_link(struct memtx_story *story, struct memtx_story *old_story,
-		    uint32_t index)
-{
-	assert(index < story->index_count);
-	assert(old_story == NULL || index < old_story->index_count);
-	struct memtx_story_link *link = &story->link[index];
-	/* Must be unlinked. */
-	assert(link->older_story == NULL);
-	link->older_story = old_story;
-	if (old_story != NULL) {
-		old_story->link[index].newer_story = story;
-		/* Rebind gap records to the top of the list */
-		rlist_splice(&link->nearby_gaps,
-			     &old_story->link[index].nearby_gaps);
-	}
-}
-
-/**
- * Add @a stmt to the list of deleting statements in @a story.
- */
-static void
-memtx_tx_story_add_del_stmt(struct memtx_story *story, struct txn_stmt *stmt)
-{
-	assert(story != NULL);
 	assert(stmt->del_story == NULL);
 	assert(stmt->next_in_del_list = NULL);
 
@@ -511,51 +462,180 @@ memtx_tx_story_add_del_stmt(struct memtx_story *story, struct txn_stmt *stmt)
 }
 
 /**
- * Link a @a story with @a older_story in @a primary index, with a @a stmt -
- * the statement that adds the story and deletes older.
- * @a older_story is allowed to be NULL.
+ * Unlink that @a story from @a stmt that deleted it.
+ * Effectively undo memtx_tx_story_link_deleted_by.
  */
 static void
-memtx_tx_story_link_pk(struct memtx_story *story,
-		       struct memtx_story *older_story,
-		       struct txn_stmt *stmt)
+memtx_tx_story_unlink_deleted_by(struct memtx_story *story,
+				 struct txn_stmt *stmt)
 {
-	struct memtx_story_link *link = &story->link[0];
-	/* Must be unlinked. */
-	assert(story->add_stmt == NULL);
+	assert(stmt->del_story == story);
+
+	/* Find a place in list from which stmt must be deleted. */
+	struct txn_stmt **ptr = &story->del_stmt;
+	while (*ptr != stmt) {
+		ptr = &(*ptr)->next_in_del_list;
+		assert(ptr != NULL);
+	}
+	*ptr = stmt->next_in_del_list;
+	stmt->next_in_del_list = NULL;
+	stmt->del_story = NULL;
+}
+
+/**
+ * Link a @a story with @a old_story in @a index (in both directions).
+ * @a old_story is allowed to be NULL.
+ */
+static void
+memtx_tx_story_link(struct memtx_story *story,
+		    struct memtx_story *old_story,
+		    uint32_t idx)
+{
+	assert(idx < story->index_count);
+	struct memtx_story_link *link = &story->link[idx];
 	assert(link->older_story == NULL);
-	assert(stmt->add_story == NULL);
-	assert(stmt->del_story == NULL);
-	assert(stmt->next_in_del_list == NULL);
-	story->add_stmt = stmt;
-	stmt->add_story = story;
-	link->older_story = older_story;
-	if (older_story != NULL) {
-		older_story->link[0].newer_story = story;
-		memtx_tx_story_add_del_stmt(older_story, stmt);
-		/* Rebind gap records to the top of the list */
-		rlist_splice(&link->nearby_gaps,
-			     &older_story->link[0].nearby_gaps);
+
+	if (old_story == NULL)
+		return;
+
+	assert(idx < old_story->index_count);
+	struct memtx_story_link *old_link = &old_story->link[idx];
+	assert(old_link->newer_story == NULL);
+
+	link->older_story = old_story;
+	old_link->newer_story = story;
+}
+
+/**
+ * Unlink a @a story with @ old_story in @a index (in both directions).
+ * Older story is allowed to be NULL.
+ */
+static void
+memtx_tx_story_unlink(struct memtx_story *story,
+		      struct memtx_story *old_story,
+		      uint32_t idx)
+{
+	assert(idx < story->index_count);
+	struct memtx_story_link *link = &story->link[idx];
+	assert(link->older_story == old_story);
+
+	if (old_story == NULL)
+		return;
+
+	assert(idx < old_story->index_count);
+	struct memtx_story_link *old_link = &old_story->link[idx];
+	assert(old_link->newer_story == story);
+
+	link->older_story = NULL;
+	old_link->newer_story = NULL;
+}
+
+/**
+ * Link a @a story with @a old_story in @a index (in both directions),
+ * where old_story was at the top of chain. This is a light version of
+ * function, intended for the case when the appropriate index IS ALREADY
+ * changed, and now stores story->tuple.
+ * In addition to linking in list, this function also rebinds gap records
+ * to the new top - story - in history chain.
+ * @a old_story is allowed to be NULL.
+ */
+static void
+memtx_tx_story_link_top_light(struct memtx_story *new_top,
+			      struct memtx_story *old_top,
+			      uint32_t idx)
+{
+	memtx_tx_story_link(new_top, old_top, idx);
+
+	if (old_top == NULL)
+		return;
+
+	/* Rebind gap records to the top of the list */
+	struct memtx_story_link *new_link = &new_top->link[idx];
+	struct memtx_story_link *old_link = &old_top->link[idx];
+	rlist_splice(&new_link->nearby_gaps, &old_link->nearby_gaps);
+}
+
+/**
+ * Link a @a story with @a old_story in @a index (in both directions),
+ * where old_story was at the top of chain (that means that index itself
+ * stores a pointer to old_story->tuple).
+ * This function makes also changes in the index, replacing old_story->tuple
+ * with with story->tuple.
+ */
+static void
+memtx_tx_story_link_top(struct memtx_story *new_top,
+			struct memtx_story *old_top,
+			uint32_t idx)
+{
+	assert(old_top != NULL);
+	memtx_tx_story_link_top_light(new_top, old_top, idx);
+
+	/* Make the change in index. */
+	struct index *index = new_top->space->index[idx];
+	struct tuple *removed, *unused;
+	if (index_replace(index, old_top->tuple, new_top->tuple,
+			  DUP_REPLACE, &removed, &unused) != 0) {
+		diag_log();
+		unreachable();
+		panic("failed to rebind story in index");
+	}
+	assert(old_top->tuple == removed);
+
+	/*
+	 * A space holds references to all his tuples.
+	 * All tuples that are physically in the primary index are referenced.
+	 * Thus we have to reference the tuple that was added to the primar
+	 * index and dereference the tuple that was removed from it.
+	 */
+	if (idx == 0) {
+		tuple_ref(new_top->tuple);
+		tuple_unref(old_top->tuple);
 	}
 }
 
 /**
- * Unlink a @a story with older story in @a index (in both directions).
+ * Change the order of stories in history chain.
  */
 static void
-memtx_tx_story_unlink(struct memtx_story *story, uint32_t index)
+memtx_tx_story_reorder(struct memtx_story *story,
+		       struct memtx_story *old_story,
+		       uint32_t idx)
 {
-	assert(index < story->index_count);
-	struct memtx_story_link *link = &story->link[index];
-	assert(link->older_story == NULL ||
-	       index < link->older_story->index_count);
-	if (link->older_story != NULL)
-		link->older_story->link[index].newer_story = NULL;
-	link->older_story = NULL;
+	assert(idx < story->index_count);
+	assert(idx < old_story->index_count);
+	struct memtx_story_link *link = &story->link[idx];
+	struct memtx_story_link *old_link = &old_story->link[idx];
+	assert(link->older_story == old_story);
+	assert(old_link->newer_story == story);
+	struct memtx_story *newer_story = link->newer_story;
+	struct memtx_story *older_story = old_link->older_story;
+
+	/*
+	 * We have a list of stories, and we have to reorder it.
+	 *           What we have                 What we want
+	 *      [ index/newer_story ]        [ index/newer_story ]
+	 *      [       story       ]        [     old_story     ]
+	 *      [     old_story     ]        [       story       ]
+	 *      [    older_story    ]        [    older_story    ]
+	 */
+	memtx_tx_story_unlink(story, old_story, idx);
+	memtx_tx_story_unlink(old_story, older_story, idx);
+	if (newer_story != NULL) {
+		/* Simple relink in list. */
+		memtx_tx_story_unlink(newer_story, story, idx);
+		memtx_tx_story_link(newer_story, old_story, idx);
+		memtx_tx_story_link(old_story, story, idx);
+	} else {
+		/*
+		 * story was in the top of history chain. In terms of reorder,
+		 * we have to make old_story the new top of chain. */
+		memtx_tx_story_link_top(old_story, story, idx);
+	}
+	memtx_tx_story_link(story, older_story, idx);
 }
 
 /**
- * Ulink @a story from all chains and remove corresponding tuple from
+ * Unlink @a story from all chains and remove corresponding tuple from
  * indexes if necessary.
  */
 static void
@@ -1220,19 +1300,20 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 			goto fail;
 
 		/* Create add_story and del_story if necessary. */
-		add_story = memtx_tx_story_new_add_stmt(new_tuple, stmt);
+		add_story = memtx_tx_story_new(space, new_tuple);
 		if (add_story == NULL)
 			goto fail;
+		memtx_tx_story_link_added_by(add_story, stmt);
 
 		if (replaced != NULL && !replaced->is_dirty) {
-			del_story = memtx_tx_story_new_del_stmt(replaced, stmt);
+			del_story = memtx_tx_story_new(space, replaced);
 			if (del_story == NULL)
 				goto fail;
 			del_story_is_created = true;
-			memtx_tx_story_link(add_story, del_story, 0);
+			memtx_tx_story_link_top_light(add_story, del_story, 0);
 		} else if (replaced != NULL) {
 			del_story = memtx_tx_story_get(replaced);
-			memtx_tx_story_link(add_story, del_story, 0);
+			memtx_tx_story_link_top_light(add_story, del_story, 0);
 		} else {
 			memtx_tx_handle_gap_write(stmt->txn, space,
 						  add_story, new_tuple,
@@ -1249,34 +1330,14 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 			assert(directly_replaced[i]->is_dirty);
 			struct memtx_story *next =
 				memtx_tx_story_get(directly_replaced[i]);
-			memtx_tx_story_link(add_story, next, i);
+			memtx_tx_story_link_top_light(add_story, next, i);
 		}
-
 	} else {
 		/*
 		 * CASE 2. new_tuple == NULL.
 		 * The old_tuple is deleted (and obviously not NULL).
 		 * Just for understanding, that's a DELETE statement.
 		 */
-		if (old_tuple->is_dirty) {
-			del_story = memtx_tx_story_get(old_tuple);
-		} else {
-			del_story = memtx_tx_story_new_del_stmt(old_tuple,
-								stmt);
-			if (del_story == NULL)
-				goto fail;
-			del_story_is_created = true;
-		}
-	}
-
-	assert(del_story == NULL || !del_story_is_created ||
-	       (del_story->del_stmt == stmt &&
-		del_story->del_stmt->next_in_del_list == NULL &&
-		stmt->del_story == del_story));
-	if (del_story != NULL && !del_story_is_created) {
-		stmt->next_in_del_list = del_story->del_stmt;
-		del_story->del_stmt = stmt;
-		stmt->del_story = del_story;
 	}
 
 	/* Purge found conflicts. */
@@ -1285,6 +1346,17 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 					    collected_conflicts->victim) != 0)
 			goto fail;
 		collected_conflicts = collected_conflicts->next;
+	}
+
+	/*
+	 * In any case old_tuple now point to prepared tuple that is
+	 * deleted by this statement (possibly NULL, if nothing deleted).
+	 */
+	if (old_tuple != NULL) {
+		assert(old_tuple->is_dirty);
+		if (old_tuple != directly_replaced[0])
+			del_story = memtx_tx_story_get(old_tuple);
+		memtx_tx_story_link_deleted_by(del_story, stmt);
 	}
 
 	if (new_tuple != NULL) {
@@ -1314,9 +1386,9 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 
 fail:
 	if (add_story != NULL)
-		memtx_tx_story_delete_add_stmt(add_story);
+		memtx_tx_story_delete(add_story);
 	if (del_story_is_created)
-		memtx_tx_story_delete_del_stmt(del_story);
+		memtx_tx_story_delete(del_story);
 	stmt->add_story = stmt->del_story = NULL;
 
 	while (directly_replaced_count > 0) {
@@ -1338,19 +1410,8 @@ fail:
 void
 memtx_tx_history_rollback_stmt(struct txn_stmt *stmt)
 {
-	if (stmt->del_story != NULL) {
-		struct memtx_story *story = stmt->del_story;
-
-		struct txn_stmt **prev = &story->del_stmt;
-		while (*prev != stmt) {
-			prev = &(*prev)->next_in_del_list;
-			assert(*prev != NULL);
-		}
-		*prev = stmt->next_in_del_list;
-		stmt->next_in_del_list = NULL;
-
-		stmt->del_story = NULL;
-	}
+	if (stmt->del_story != NULL)
+		memtx_tx_story_unlink_deleted_by(stmt->del_story, stmt);
 
 	if (stmt->add_story != NULL) {
 		assert(stmt->add_story->tuple == stmt->new_tuple);
