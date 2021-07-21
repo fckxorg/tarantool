@@ -491,6 +491,17 @@ lbox_prepare(struct lua_State *L)
 	return 1;
 }
 
+static int
+lbox_sql_atof(struct lua_State *L)
+{
+    size_t len = 0;
+    double result = 0.0;
+    const char *str_val = lua_tolstring(L, 1, &len);
+    sqlAtoF(str_val, &result, len);
+    printf("%.110f\n", result);
+    return 0;
+};
+
 void
 box_lua_sql_init(struct lua_State *L)
 {
@@ -506,6 +517,10 @@ box_lua_sql_init(struct lua_State *L)
 	lua_pushstring(L, "unprepare");
 	lua_pushcfunction(L, lbox_unprepare);
 	lua_settable(L, -3);
+
+    lua_pushstring(L, "sql_atof");
+    lua_pushcfunction(L, lbox_sql_atof);
+    lua_settable(L, -3);
 
 	lua_pop(L, 1);
 }
