@@ -498,7 +498,7 @@ lbox_sql_atof(struct lua_State *L)
     double result = 0.0;
     const char *str_val = lua_tolstring(L, 1, &len);
     sqlAtoF(str_val, &result, len);
-    printf("%.110f\n", result);
+    printf("%.150f\n", result);
     return 0;
 };
 
