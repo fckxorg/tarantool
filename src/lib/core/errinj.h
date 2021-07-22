@@ -154,6 +154,8 @@ struct errinj {
 	_(ERRINJ_IPROTO_SINGLE_THREAD_STAT, ERRINJ_INT, {.iparam = -1}) \
 	_(ERRINJ_IPROTO_WRITE_ERROR_DELAY, ERRINJ_BOOL, {.bparam = false})\
 	_(ERRINJ_APPLIER_READ_TX_ROW_DELAY, ERRINJ_BOOL, {.bparam = false})\
+	_(ERRINJ_IPROTO_STREAM_COUNT, ERRINJ_INT, {.iparam = 0}) \
+	_(ERRINJ_IPROTO_STREAMS_MSG_COUNT, ERRINJ_INT, {.iparam = 0}) \
 
 ENUM0(errinj_id, ERRINJ_LIST);
 extern struct errinj errinjs[];

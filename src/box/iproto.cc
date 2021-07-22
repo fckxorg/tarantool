@@ -63,6 +63,8 @@
 #include "execute.h"
 #include "errinj.h"
 #include "tt_static.h"
+#include "salad/stailq.h"
+#include "assoc.h"
 
 enum {
 	IPROTO_SALT_SIZE = 32,
@@ -71,6 +73,24 @@ enum {
 
 enum {
 	 ENDPOINT_NAME_MAX = 10
+};
+
+struct iproto_connection;
+struct iproto_msg;
+
+struct iproto_stream {
+	/**
+	 * Queue of pending requests (iproto messages) for this stream,
+	 * processed sequentially. This field is accesable only from
+	 * iproto thread. Queue items has iproto_msg type.
+	 */
+	struct stailq pending_requests;
+	/** Id of this stream, used as a key in streams hash table */
+	uint32_t id;
+	/** This stream connection */
+	struct iproto_connection *connection;
+	/** Iproto message to gracefully destroy stream */
+	struct iproto_msg *on_disconnect;
 };
 
 /**
@@ -117,6 +137,7 @@ struct iproto_thread {
 	/**
 	 * Static routes for this iproto thread
 	 */
+	struct cmsg_hop destroy_stream_on_disconnect_route[2];
 	struct cmsg_hop destroy_route[2];
 	struct cmsg_hop disconnect_route[2];
 	struct cmsg_hop misc_route[2];
@@ -135,6 +156,7 @@ struct iproto_thread {
 	 */
 	struct mempool iproto_msg_pool;
 	struct mempool iproto_connection_pool;
+	struct mempool streams_pool;
 	/*
 	 * List of stopped connections
 	 */
@@ -303,6 +325,16 @@ struct iproto_msg
 	 * and the connection must be closed.
 	 */
 	bool close_connection;
+	/**
+	 * A stailq_entry to hold message in stream.
+	 * All messages processed in stream sequently. Before processing
+	 * all messages added to queue of pending requests. If this queue
+	 * was empty message begins to be processed, otherwise it waits until
+	 * all previous messages are processed.
+	 */
+	struct stailq_entry in_stream;
+	/** Stream that owns this message, or NULL. */
+	struct iproto_stream *stream;
 };
 
 static struct iproto_msg *
@@ -505,6 +537,13 @@ struct iproto_connection
 	enum iproto_connection_state state;
 	struct rlist in_stop_list;
 	/**
+	 * Hash table that holds all streams for this connection.
+	 * This field is accesable only from iproto thread.
+	 */
+	struct mh_i64ptr_t *streams;
+	/** Count of streams pending destroy on disconnect */
+	uint64_t streams_pending_destroy_on_disconnect;
+	/**
 	 * Kharon is used to implement box.session.push().
 	 * When a new push is ready, tx uses kharon to notify
 	 * iproto about new data in connection output buffer.
@@ -557,6 +596,72 @@ struct iproto_connection
 	struct iproto_thread *iproto_thread;
 };
 
+static inline void
+errinj_inc_stream_count(void)
+{
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAM_COUNT, ERRINJ_INT);
+	__atomic_add_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+static inline void
+errinj_dec_stream_count(void)
+{
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAM_COUNT, ERRINJ_INT);
+	__atomic_sub_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+static inline void
+errinj_inc_streams_msg_count(void)
+{
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAMS_MSG_COUNT, ERRINJ_INT);
+	__atomic_add_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+static inline void
+errinj_dec_streams_msg_count(void)
+{
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAMS_MSG_COUNT, ERRINJ_INT);
+	__atomic_sub_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+static struct iproto_stream *
+iproto_stream_new(struct iproto_connection *connection, uint64_t stream_id)
+{
+	struct iproto_stream *stream = (struct iproto_stream *)
+		mempool_alloc(&connection->iproto_thread->streams_pool);
+	if (stream == NULL) {
+		diag_set(OutOfMemory, sizeof(*stream),
+			 "mempool_alloc", "stream");
+		return NULL;
+	}
+	stream->on_disconnect = iproto_msg_new(connection);
+	if (stream->on_disconnect == NULL) {
+		mempool_free(&connection->iproto_thread->streams_pool, stream);
+		return NULL;
+	}
+	stream->on_disconnect->stream = stream;
+	struct iproto_thread *iproto_thread = connection->iproto_thread;
+	cmsg_init(&stream->on_disconnect->base,
+		  iproto_thread->destroy_stream_on_disconnect_route);
+	errinj_inc_stream_count();
+	stailq_create(&stream->pending_requests);
+	stream->id = stream_id;
+	stream->connection = connection;
+	return stream;
+}
+
 /**
  * Return true if we have not enough spare messages
  * in the message pool.
@@ -574,6 +679,27 @@ iproto_msg_delete(struct iproto_msg *msg)
 	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
 	mempool_free(&msg->connection->iproto_thread->iproto_msg_pool, msg);
 	iproto_resume(iproto_thread);
+}
+
+static void
+iproto_stream_delete(struct iproto_stream *stream)
+{
+	/**
+	 * We may still have some unprocessed requests in
+	 * case of disconnect. Clear them all.
+	 */
+	while (!stailq_empty(&stream->pending_requests)) {
+		struct iproto_msg *next =
+			stailq_shift_entry(&stream->pending_requests,
+					   struct iproto_msg, in_stream);
+		assert(next->len != 0);
+		/* Discard request (see iproto_enqueue_batch()). */
+		next->p_ibuf->rpos += next->len;
+		iproto_msg_delete(next);
+		errinj_dec_streams_msg_count();
+	}
+	errinj_dec_stream_count();
+	mempool_free(&stream->connection->iproto_thread->streams_pool, stream);
 }
 
 static struct iproto_msg *
@@ -594,6 +720,7 @@ iproto_msg_new(struct iproto_connection *con)
 	}
 	msg->close_connection = false;
 	msg->connection = con;
+	msg->stream = NULL;
 	rmean_collect(con->iproto_thread->rmean, IPROTO_REQUESTS, 1);
 	return msg;
 }
@@ -617,6 +744,7 @@ static inline bool
 iproto_connection_is_idle(struct iproto_connection *con)
 {
 	return con->long_poll_count == 0 &&
+	       con->streams_pending_destroy_on_disconnect == 0 &&
 	       ibuf_used(&con->ibuf[0]) == 0 &&
 	       ibuf_used(&con->ibuf[1]) == 0;
 }
@@ -706,7 +834,33 @@ iproto_connection_close(struct iproto_connection *con)
 		 * is done only once.
 		 */
 		con->p_ibuf->wpos -= con->parse_size;
-		cpipe_push(&con->iproto_thread->tx_pipe, &con->disconnect_msg);
+		/**
+		 * Iterate over all connection streams and send special
+		 * preallocated message to tx thread to destroy all streams.
+		 */
+		mh_int_t node;
+		mh_foreach(con->streams, node) {
+			struct iproto_stream *stream = (struct iproto_stream *)
+				mh_i64ptr_node(con->streams, node)->val;
+			con->streams_pending_destroy_on_disconnect++;
+			struct stailq_entry *first =
+				stailq_first(&stream->pending_requests);
+			assert(first != NULL);
+			stailq_insert(&stream->pending_requests,
+				      &stream->on_disconnect->in_stream,
+				      first);
+			errinj_inc_streams_msg_count();
+		}
+		/**
+		 * If there is no streams which pending destroyed we immediately
+		 * push disconnect_msg to tx thread, otherwise it will be pushed
+		 * from `net_finish_destroy_stream_on_disconnect` when last
+		 * stream will be destroyed.
+		 */
+		if (con->streams_pending_destroy_on_disconnect == 0) {
+			cpipe_push(&con->iproto_thread->tx_pipe,
+				   &con->disconnect_msg);
+		}
 		assert(con->state == IPROTO_CONNECTION_ALIVE);
 		con->state = IPROTO_CONNECTION_CLOSED;
 	} else if (con->state == IPROTO_CONNECTION_PENDING_DESTROY) {
@@ -822,6 +976,63 @@ iproto_connection_input_buffer(struct iproto_connection *con)
 }
 
 /**
+ * Checks if message belongs to stream (stream_id != 0), and if it
+ * is so creates new stream or gets stream from connection streams
+ * hash table. Puts message to stream pending messages list.
+ * @retval 0 - the message is ready to push to TX thread (either if
+ *             stream_id is not set (is zero) or the stream is not
+ *             processing other messages).
+ *         1 - the message is postponed because its stream is busy
+ *             processing previous message(s).
+ *        -1 - memory error.
+ */
+static int
+iproto_set_msg_stream(struct iproto_msg *msg)
+{
+	uint32_t stream_id = msg->header.stream_id;
+	if (stream_id == 0)
+		return 0;
+
+	struct iproto_connection *con = msg->connection;
+	struct iproto_stream *stream = NULL;
+	mh_int_t pos = mh_i64ptr_find(con->streams, stream_id, 0);
+	if (pos == mh_end(con->streams)) {
+		stream = iproto_stream_new(msg->connection, msg->header.stream_id);
+		if (stream == NULL)
+			return -1;
+		struct mh_i64ptr_node_t node;
+		node.key = stream_id;
+		node.val = stream;
+		pos = mh_i64ptr_put(con->streams, &node, NULL, NULL);
+		if (pos == mh_end(con->streams)) {
+			iproto_stream_delete(stream);
+			diag_set(OutOfMemory, pos + 1, "mh_streams_put",
+				 "mh_streams_node");
+			return -1;
+		}
+	}
+	/*
+	 * Not all messages belongs to stream. We can't determine which
+	 * messages belong to stream in `iproto_msg_new`, so we increment
+	 * ERRINJ_IPROTO_STREAMS_MSG_COUNT here, when we already know it.
+	 * In `iproto_msg_delete` we decrement ERRINJ_IPROTO_STREAMS_MSG_COUNT
+	 * only if msg->stream != NULL.
+	 */
+	errinj_inc_streams_msg_count();
+	stream = (struct iproto_stream *)mh_i64ptr_node(con->streams, pos)->val;
+	msg->stream = stream;
+	/*
+	 * If the request queue in the stream is not empty, it means
+	 * that some previous message wasn't processed yet. Regardless
+	 * of this, we put the message in the queue, but we start processing
+	 * the message only if the message queue in the stream was empty.
+	 */
+	bool was_not_empty = !stailq_empty(&stream->pending_requests);
+	stailq_add_tail_entry(&stream->pending_requests, msg, in_stream);
+	return was_not_empty ? 1 : 0;
+}
+
+/**
  * Enqueue all requests which were read up. If a request limit is
  * reached - stop the connection input even if not the whole batch
  * is enqueued. Else try to read more feeding read event to the
@@ -883,12 +1094,30 @@ err_msgpack:
 		msg->len = reqend - reqstart; /* total request length */
 
 		iproto_msg_decode(msg, &pos, reqend, &stop_input);
+
+		int rc = iproto_set_msg_stream(msg);
+		if (rc < 0) {
+			iproto_msg_delete(msg);
+			/*
+			 * Do not treat it as an error - just wait
+			 * until some of requests are finished.
+			 */
+			iproto_connection_stop_msg_max_limit(con);
+			return 0;
+		}
 		/*
-		 * This can't throw, but should not be
-		 * done in case of exception.
+		 * rc > 0, means that stream pending requests queue is not
+		 * empty, skip push.
 		 */
-		cpipe_push_input(&con->iproto_thread->tx_pipe, &msg->base);
-		n_requests++;
+		if (rc == 0) {
+			/*
+			 * This can't throw, but should not be
+			 * done in case of exception.
+			 */
+			cpipe_push_input(&con->iproto_thread->tx_pipe, &msg->base);
+			n_requests++;
+		}
+
 		/* Request is parsed */
 		assert(reqend > reqstart);
 		assert(con->parse_size >= (size_t) (reqend - reqstart));
@@ -1130,6 +1359,13 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 		diag_set(OutOfMemory, sizeof(*con), "mempool_alloc", "con");
 		return NULL;
 	}
+	con->streams = mh_i64ptr_new();
+	if (con->streams == NULL) {
+		diag_set(OutOfMemory, sizeof(*(con->streams)),
+			 "mh_streams_new", "streams");
+		mempool_free(&con->iproto_thread->iproto_connection_pool, con);
+		return NULL;
+	}
 	con->iproto_thread = iproto_thread;
 	con->input.data = con->output.data = con;
 	con->loop = loop();
@@ -1149,6 +1385,7 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 	con->long_poll_count = 0;
 	con->session = NULL;
 	rlist_create(&con->in_stop_list);
+	con->streams_pending_destroy_on_disconnect = 0;
 	/* It may be very awkward to allocate at close. */
 	cmsg_init(&con->destroy_msg, con->iproto_thread->destroy_route);
 	cmsg_init(&con->disconnect_msg, con->iproto_thread->disconnect_route);
@@ -1178,6 +1415,8 @@ iproto_connection_delete(struct iproto_connection *con)
 	       con->obuf[0].iov[0].iov_base == NULL);
 	assert(con->obuf[1].pos == 0 &&
 	       con->obuf[1].iov[0].iov_base == NULL);
+
+	mh_i64ptr_delete(con->streams);
 	mempool_free(&con->iproto_thread->iproto_connection_pool, con);
 }
 
@@ -1225,7 +1464,9 @@ static void
 iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 		  bool *stop_input)
 {
+	uint32_t stream_id;
 	uint8_t type;
+	bool request_is_not_for_stream;
 	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
 
 	if (xrow_header_decode(&msg->header, pos, reqend, true))
@@ -1233,6 +1474,16 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	assert(*pos == reqend);
 
 	type = msg->header.type;
+	stream_id = msg->header.stream_id;
+	request_is_not_for_stream =
+		(type > IPROTO_TYPE_STAT_MAX &&
+		 type != IPROTO_PING);
+
+	if (stream_id != 0 && request_is_not_for_stream) {
+		diag_set(ClientError, ER_UNABLE_TO_PROCESS_IN_STREAM,
+			 (uint32_t) type);
+		goto error;
+	}
 
 	/*
 	 * Parse request before putting it into the queue
@@ -1324,6 +1575,32 @@ tx_fiber_init(struct session *session, uint64_t sync)
 	 */
 	fiber_set_session(f, session);
 	fiber_set_user(f, &session->credentials);
+}
+
+static void
+tx_process_destroy_stream_on_disconnect(struct cmsg *m)
+{
+	(void)m;
+}
+
+static void
+net_finish_destroy_stream_on_disconnect(struct cmsg *m)
+{
+	struct iproto_msg *on_disconnect = (struct iproto_msg *) m;
+	struct iproto_stream *stream = on_disconnect->stream;
+	struct iproto_connection *con= stream->connection;
+
+	stailq_shift_entry(&stream->pending_requests,
+			   struct iproto_msg, in_stream);
+	errinj_dec_streams_msg_count();
+
+	struct mh_i64ptr_node_t node = { stream->id, NULL };
+	mh_i64ptr_remove(con->streams, &node, 0);
+	iproto_stream_delete(stream);
+	con->streams_pending_destroy_on_disconnect--;
+
+	if (con->streams_pending_destroy_on_disconnect == 0)
+		cpipe_push(&con->iproto_thread->tx_pipe, &con->disconnect_msg);
 }
 
 static void
@@ -1857,7 +2134,35 @@ net_send_msg(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
+	struct iproto_stream *stream = msg->stream;
 
+	if (stream == NULL)
+		goto send_msg;
+
+	stailq_shift_entry(&stream->pending_requests,
+			   struct iproto_msg, in_stream);
+	errinj_dec_streams_msg_count();
+
+	if (stailq_empty(&stream->pending_requests)) {
+		struct mh_i64ptr_node_t node = { stream->id, NULL };
+		mh_i64ptr_remove(con->streams, &node, 0);
+		iproto_stream_delete(stream);
+	} else {
+		/*
+		 * If there are new messages for this stream
+		 * then schedule their processing.
+		 */
+		struct iproto_msg *next =
+			stailq_first_entry(&stream->pending_requests,
+					   struct iproto_msg, in_stream);
+		assert(next != NULL);
+		next->wpos = con->wpos;
+		cpipe_push_input(&con->iproto_thread->tx_pipe,
+				 &next->base);
+		cpipe_flush_input(&con->iproto_thread->tx_pipe);
+	}
+
+send_msg:
 	if (msg->len != 0) {
 		/* Discard request (see iproto_enqueue_batch()). */
 		msg->p_ibuf->rpos += msg->len;
@@ -2045,6 +2350,8 @@ net_cord_f(va_list  ap)
 		       sizeof(struct iproto_msg));
 	mempool_create(&iproto_thread->iproto_connection_pool, &cord()->slabc,
 		       sizeof(struct iproto_connection));
+	mempool_create(&iproto_thread->streams_pool, &cord()->slabc,
+		       sizeof(struct iproto_stream));
 
 	evio_service_init(loop(), &iproto_thread->binary, "binary",
 			  iproto_on_accept, iproto_thread);
@@ -2168,6 +2475,11 @@ iproto_session_push(struct session *session, struct port *port)
 static inline void
 iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 {
+	iproto_thread->destroy_stream_on_disconnect_route[0] =
+		{ tx_process_destroy_stream_on_disconnect,
+		  &iproto_thread->net_pipe };
+	iproto_thread->destroy_stream_on_disconnect_route[1] =
+		{ net_finish_destroy_stream_on_disconnect, NULL };
 	iproto_thread->destroy_route[0] =
 		{ tx_process_destroy, &iproto_thread->net_pipe };
 	iproto_thread->destroy_route[1] =
