@@ -613,8 +613,10 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			}
 			/* Remove trailing zeros and the "." if no digits follow the "." */
 			if (flag_rtz && flag_dp) {
-				while (bufpt[-1] == '0')
+				while (bufpt[-1] == '0') {
+					printf("remove trailing zeroes\n");
 					*(--bufpt) = 0;
+				}
 				assert(bufpt > zOut);
 				if (bufpt[-1] == '.') {
 					if (flag_altform2) {
