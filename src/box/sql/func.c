@@ -1100,12 +1100,14 @@ quoteFunc(sql_context * context, int argc, sql_value ** argv)
 	UNUSED_PARAMETER(argc);
 	switch (sql_value_type(argv[0])) {
 	case MP_DOUBLE:{
+	        printf("double\n");
 			double r1, r2;
 			char zBuf[50];
 			r1 = mem_get_double_unsafe(argv[0]);
 			sql_snprintf(sizeof(zBuf), zBuf, "%!.15g", r1);
 			sqlAtoF(zBuf, &r2, 20);
 			if (r1 != r2) {
+			    printf("r1 != r2");
 				sql_snprintf(sizeof(zBuf), zBuf, "%!.20e",
 						 r1);
 			}
