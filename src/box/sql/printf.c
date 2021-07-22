@@ -513,9 +513,9 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			for (idx = precision & 0xfff, rounder = 0.5; idx > 0;
 			     idx--, rounder *= 0.1) {
 			}
+			printf("Rounder: %.20e", rounder);
 			if (xtype == etFLOAT)
 				realvalue += rounder;
-			printf("Realvalue: %.20e");
 			/* Normalize realvalue to within 10.0 > realvalue >= 1.0 */
 			exp = 0;
 			if (sqlIsNaN((double)realvalue)) {
