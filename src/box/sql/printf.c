@@ -513,7 +513,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			for (idx = precision & 0xfff, rounder = 0.5; idx > 0;
 			     idx--, rounder *= 0.1) {
 			}
-			printf("Rounder: %.20e", rounder);
+			printf("Rounder: %.20e\n", rounder);
 			if (xtype == etFLOAT)
 				realvalue += rounder;
 			/* Normalize realvalue to within 10.0 > realvalue >= 1.0 */
@@ -570,9 +570,11 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 				flag_rtz = !flag_alternateform;
 				if (exp < -4 || exp > precision) {
 					xtype = etEXP;
+					printf("Now xtype is etEXP\n");
 				} else {
 					precision = precision - exp;
 					xtype = etFLOAT;
+					printf("Now xtype is etFLOAT\n");
 				}
 			} else {
 				flag_rtz = flag_altform2;
@@ -582,6 +584,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			} else {
 				e2 = exp;
 			}
+			printf("realvalue is: %.20Le\n", realvalue);
 			if (MAX(e2, 0) + (i64) precision + (i64) width >
 			    etBUFSIZE - 15) {
 				bufpt = zExtra =
