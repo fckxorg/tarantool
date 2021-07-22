@@ -476,6 +476,19 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 		case etFLOAT:
 		case etEXP:
 		case etGENERIC:
+			switch(xtype) {
+				case etFLOAT:
+					printf("etFLOAT\n");
+					break;
+				case etEXP:
+					printf("etEXP\n");
+					break;
+				case etGENERIC:
+					printf("etGENERIC\n");
+					break;
+				default:
+					mp_unreachable();
+			}
 			if (bArgList) {
 				realvalue = getDoubleArg(pArgList);
 			} else {
@@ -502,6 +515,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			}
 			if (xtype == etFLOAT)
 				realvalue += rounder;
+			printf("Realvalue: %.20e");
 			/* Normalize realvalue to within 10.0 > realvalue >= 1.0 */
 			exp = 0;
 			if (sqlIsNaN((double)realvalue)) {
