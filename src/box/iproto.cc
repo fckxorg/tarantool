@@ -65,6 +65,7 @@
 #include "tt_static.h"
 #include "salad/stailq.h"
 #include "assoc.h"
+#include "txn.h"
 
 enum {
 	IPROTO_SALT_SIZE = 32,
@@ -79,6 +80,8 @@ struct iproto_connection;
 struct iproto_msg;
 
 struct iproto_stream {
+	/** Currently active stream transaction or NULL */
+	struct txn *txn;
 	/**
 	 * Queue of pending requests (iproto messages) for this stream,
 	 * processed sequentially. This field is accesable only from
@@ -137,6 +140,9 @@ struct iproto_thread {
 	/**
 	 * Static routes for this iproto thread
 	 */
+	struct cmsg_hop begin_route[2];
+	struct cmsg_hop commit_route[2];
+	struct cmsg_hop rollback_route[2];
 	struct cmsg_hop destroy_stream_on_disconnect_route[2];
 	struct cmsg_hop destroy_route[2];
 	struct cmsg_hop disconnect_route[2];
@@ -656,6 +662,7 @@ iproto_stream_new(struct iproto_connection *connection, uint64_t stream_id)
 	cmsg_init(&stream->on_disconnect->base,
 		  iproto_thread->destroy_stream_on_disconnect_route);
 	errinj_inc_stream_count();
+	stream->txn = NULL;
 	stailq_create(&stream->pending_requests);
 	stream->id = stream_id;
 	stream->connection = connection;
@@ -684,6 +691,7 @@ iproto_msg_delete(struct iproto_msg *msg)
 static void
 iproto_stream_delete(struct iproto_stream *stream)
 {
+	assert(stream->txn == NULL);
 	/**
 	 * We may still have some unprocessed requests in
 	 * case of disconnect. Clear them all.
@@ -845,10 +853,31 @@ iproto_connection_close(struct iproto_connection *con)
 			con->streams_pending_destroy_on_disconnect++;
 			struct stailq_entry *first =
 				stailq_first(&stream->pending_requests);
-			assert(first != NULL);
-			stailq_insert(&stream->pending_requests,
-				      &stream->on_disconnect->in_stream,
-				      first);
+			/**
+			 * There are to cases here:
+			 * 1. If stream requests queue is empty, it means that
+			 *    that there is some active transaction which was
+			 *    not commited yet. We need to rollback it, since
+			 *    we put special message for rollback in stream queue
+			 *    and push it to tx thread immediately.
+			 * 2. If stream requests queue is not empty, it means
+			 *    that stream processing some request in tx thread
+			 *    now. We put special message for rollback after the
+			 *    message that is currently being processed. When this
+			 *    message will be processed, we send next message (which
+			 *    we put here) to tx thread (see net_send_msg).
+			 */
+			if (first == NULL) {
+				stailq_add_tail_entry(&stream->pending_requests,
+						      stream->on_disconnect,
+						      in_stream);
+				cpipe_push(&con->iproto_thread->tx_pipe,
+					   &stream->on_disconnect->base);
+			} else {
+				stailq_insert(&stream->pending_requests,
+					      &stream->on_disconnect->in_stream,
+					      first);
+			}
 			errinj_inc_streams_msg_count();
 		}
 		/**
@@ -1467,6 +1496,7 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	uint32_t stream_id;
 	uint8_t type;
 	bool request_is_not_for_stream;
+	bool request_is_only_for_stream;
 	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
 
 	if (xrow_header_decode(&msg->header, pos, reqend, true))
@@ -1478,9 +1508,17 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	request_is_not_for_stream =
 		(type > IPROTO_TYPE_STAT_MAX &&
 		 type != IPROTO_PING);
+	request_is_only_for_stream =
+		(type == IPROTO_TRANSACTION_BEGIN ||
+		 type == IPROTO_TRANSACTION_COMMIT ||
+		 type == IPROTO_TRANSACTION_ROLLBACK);
 
 	if (stream_id != 0 && request_is_not_for_stream) {
 		diag_set(ClientError, ER_UNABLE_TO_PROCESS_IN_STREAM,
+			 (uint32_t) type);
+		goto error;
+	} else if (stream_id == 0 && request_is_only_for_stream) {
+		diag_set(ClientError, ER_UNABLE_TO_PROCESS_OUT_OF_STREAM,
 			 (uint32_t) type);
 		goto error;
 	}
@@ -1497,6 +1535,9 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	case IPROTO_UPDATE:
 	case IPROTO_DELETE:
 	case IPROTO_UPSERT:
+	case IPROTO_TRANSACTION_BEGIN:
+	case IPROTO_TRANSACTION_COMMIT:
+	case IPROTO_TRANSACTION_ROLLBACK:
 		if (xrow_decode_dml(&msg->header, &msg->dml,
 				    dml_request_key_map(type)))
 			goto error;
@@ -1580,7 +1621,16 @@ tx_fiber_init(struct session *session, uint64_t sync)
 static void
 tx_process_destroy_stream_on_disconnect(struct cmsg *m)
 {
-	(void)m;
+	struct iproto_msg *on_disconnect = (struct iproto_msg *) m;
+	struct iproto_stream *stream = on_disconnect->stream;
+
+	assert(stream != NULL);
+	if (stream->txn != NULL) {
+		fiber_set_txn(fiber(), stream->txn);
+		if (box_txn_rollback() != 0)
+			panic("failed to rollback transaction on disconnect");
+		stream->txn = NULL;
+	}
 }
 
 static void
@@ -1736,13 +1786,52 @@ tx_accept_wpos(struct iproto_connection *con, const struct iproto_wpos *wpos)
 	}
 }
 
+/**
+ * Since the processing of requests within a transaction
+ * for a stream can occur in different fibers, we store
+ * a pointer to transaction in the stream structure.
+ * Check if message belongs to stream and there is active
+ * transaction for this stream. In case it is so, sets this
+ * transaction for current fiber.
+ */
+static inline struct txn *
+tx_prepare_transaction_for_request(struct iproto_msg *msg)
+{
+	struct txn *txn = NULL;
+	if (msg != NULL && msg->stream != NULL) {
+		txn = msg->stream->txn;
+		/*
+		 * When we do any operations (which are written to `wal`)
+		 * outside of transaction, we consider each such operation
+		 * as a small transaction and write it to `wal` immediately.
+		 * When operation is performed as part of transaction, we
+		 * write all transaction to `wal` at the commit. In this case,
+		 * `is_commit` flag will be set when writing to `wal` for the
+		 * last operation in transaction, the rest operations must have
+		 * this flag set to false, to mark that they all belongs to the
+		 * same transaction.
+		 */
+		if (txn != NULL)
+			msg->header.is_commit = false;
+		fiber_set_txn(fiber(), txn);
+	}
+	return txn;
+}
+
 static inline struct iproto_msg *
 tx_accept_msg(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	tx_accept_wpos(msg->connection, &msg->wpos);
 	tx_fiber_init(msg->connection->session, msg->header.sync);
+	tx_prepare_transaction_for_request(msg);
 	return msg;
+}
+
+static inline void
+tx_end_msg(void)
+{
+	fiber_set_txn(fiber(), NULL);
 }
 
 /**
@@ -1766,6 +1855,7 @@ static void
 tx_reply_iproto_error(struct cmsg *m)
 {
 	struct iproto_msg *msg = tx_accept_msg(m);
+	assert(in_txn() == NULL);
 	struct obuf *out = msg->connection->tx.p_obuf;
 	iproto_reply_error(out, diag_last_error(&msg->diag),
 			   msg->header.sync, ::schema_version);
@@ -1780,6 +1870,88 @@ tx_inject_delay(void)
 		if (rand() % 100 < 10)
 			fiber_sleep(0.001);
 	});
+}
+
+static void
+tx_process_begin(struct cmsg *m)
+{
+	struct iproto_msg *msg = tx_accept_msg(m);
+	struct obuf *out;
+	struct iproto_stream *stream = msg->stream;
+
+	if (tx_check_schema(msg->header.schema_version))
+		goto error;
+
+	if (box_txn_begin() != 0)
+		goto error;
+
+	stream->txn = in_txn();
+	/*
+	 * By default if the fiber is stopped the transaction
+	 * started in this fiber is rollback. But in our case,
+	 * fiber can be stopped after processing any request, and
+	 * transaction must be continued later when a new request
+	 * is received. Therefore, we should clear this trigger to
+	 * avoid transaction rollback.
+	 */
+	trigger_clear(&stream->txn->fiber_on_stop);
+	tx_end_msg();
+
+	out = msg->connection->tx.p_obuf;
+	iproto_reply_ok(out, msg->header.sync, ::schema_version);
+	iproto_wpos_create(&msg->wpos, out);
+	return;
+error:
+	tx_end_msg();
+	tx_reply_error(msg);
+}
+
+static void
+tx_process_commit(struct cmsg *m)
+{
+	struct iproto_msg *msg = tx_accept_msg(m);
+	struct obuf *out;
+	struct iproto_stream *stream = msg->stream;
+
+	if (tx_check_schema(msg->header.schema_version))
+		goto error;
+
+	if (box_txn_commit() != 0) {
+		stream->txn = in_txn();
+		goto error;
+	}
+
+	stream->txn = NULL;
+	out = msg->connection->tx.p_obuf;
+	iproto_reply_ok(out, msg->header.sync, ::schema_version);
+	iproto_wpos_create(&msg->wpos, out);
+	return;
+error:
+	tx_end_msg();
+	tx_reply_error(msg);
+}
+
+static void
+tx_process_rollback(struct cmsg *m)
+{
+	struct iproto_msg *msg = tx_accept_msg(m);
+	struct obuf *out;
+	struct iproto_stream *stream = msg->stream;
+
+	if (tx_check_schema(msg->header.schema_version))
+		goto error;
+
+	if (box_txn_rollback() != 0)
+		goto error;
+
+	stream->txn = NULL;
+	out = msg->connection->tx.p_obuf;
+	iproto_reply_ok(out, msg->header.sync, ::schema_version);
+	iproto_wpos_create(&msg->wpos, out);
+	return;
+error:
+	tx_end_msg();
+	tx_reply_error(msg);
 }
 
 static void
@@ -1800,11 +1972,13 @@ tx_process1(struct cmsg *m)
 		goto error;
 	if (tuple && tuple_to_obuf(tuple, out))
 		goto error;
+	tx_end_msg();
 	iproto_reply_select(out, &svp, msg->header.sync, ::schema_version,
 			    tuple != 0);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	tx_end_msg();
 	tx_reply_error(msg);
 }
 
@@ -1843,11 +2017,13 @@ tx_process_select(struct cmsg *m)
 		obuf_rollback_to_svp(out, &svp);
 		goto error;
 	}
+	tx_end_msg();
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	tx_end_msg();
 	tx_reply_error(msg);
 }
 
@@ -1862,12 +2038,31 @@ tx_process_call_on_yield(struct trigger *trigger, void *event)
 	return 0;
 }
 
+/**
+ * Because user can use iproto call request or iproto sql request to begin,
+ * commit, or rollback transaction, we must update all transaction related
+ * members of the stream structure after processing this type of requests.
+ */
+static void
+tx_set_txn_after(struct iproto_stream *stream, struct txn *prev_txn)
+{
+	if (stream != NULL) {
+		stream->txn = in_txn();
+		fiber_set_txn(fiber(), NULL);
+		if (prev_txn == NULL && stream->txn != NULL)
+			trigger_clear(&stream->txn->fiber_on_stop);
+	}
+}
+
 static void
 tx_process_call(struct cmsg *m)
 {
 	struct iproto_msg *msg = tx_accept_msg(m);
+	struct txn *prev_txn = NULL;
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
+	if (msg->stream != NULL)
+		prev_txn = msg->stream->txn;
 
 	/*
 	 * CALL/EVAL should copy its arguments so we can discard
@@ -1933,11 +2128,13 @@ tx_process_call(struct cmsg *m)
 		goto error;
 	}
 
+	tx_set_txn_after(msg->stream, prev_txn);
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	tx_set_txn_after(msg->stream, prev_txn);
 	tx_reply_error(msg);
 }
 
@@ -1947,6 +2144,7 @@ tx_process_misc(struct cmsg *m)
 	struct iproto_msg *msg = tx_accept_msg(m);
 	struct iproto_connection *con = msg->connection;
 	struct obuf *out = con->tx.p_obuf;
+	assert(!(msg->header.type != IPROTO_PING && in_txn()));
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
@@ -1979,8 +2177,10 @@ tx_process_misc(struct cmsg *m)
 	} catch (Exception *e) {
 		tx_reply_error(msg);
 	}
+	tx_end_msg();
 	return;
 error:
+	tx_end_msg();
 	tx_reply_error(msg);
 }
 
@@ -1995,9 +2195,12 @@ tx_process_sql(struct cmsg *m)
 	const char *sql;
 	uint32_t len;
 	bool is_unprepare = false;
+	struct txn *prev_txn = NULL;
 
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
+	if (msg->stream != NULL)
+		prev_txn = msg->stream->txn;
 	assert(msg->header.type == IPROTO_EXECUTE ||
 	       msg->header.type == IPROTO_PREPARE);
 	tx_inject_delay();
@@ -2073,10 +2276,12 @@ tx_process_sql(struct cmsg *m)
 		goto error;
 	}
 	port_destroy(&port);
+	tx_set_txn_after(msg->stream, prev_txn);
 	iproto_reply_sql(out, &header_svp, msg->header.sync, schema_version);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	tx_set_txn_after(msg->stream, prev_txn);
 	tx_reply_error(msg);
 }
 
@@ -2087,6 +2292,7 @@ tx_process_replication(struct cmsg *m)
 	struct iproto_connection *con = msg->connection;
 	struct ev_io io;
 	coio_create(&io, con->input.fd);
+	assert(!in_txn());
 	try {
 		switch (msg->header.type) {
 		case IPROTO_JOIN:
@@ -2144,9 +2350,15 @@ net_send_msg(struct cmsg *m)
 	errinj_dec_streams_msg_count();
 
 	if (stailq_empty(&stream->pending_requests)) {
-		struct mh_i64ptr_node_t node = { stream->id, NULL };
-		mh_i64ptr_remove(con->streams, &node, 0);
-		iproto_stream_delete(stream);
+		/*
+		 * If no more messages for the current stream
+		 * and no transaction started, then delete it.
+		 */
+		if (stream->txn == NULL) {
+			struct mh_i64ptr_node_t node = { stream->id, NULL };
+			mh_i64ptr_remove(con->streams, &node, 0);
+			iproto_stream_delete(stream);
+		}
 	} else {
 		/*
 		 * If there are new messages for this stream
@@ -2475,6 +2687,18 @@ iproto_session_push(struct session *session, struct port *port)
 static inline void
 iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 {
+	iproto_thread->begin_route[0] =
+		{ tx_process_begin, &iproto_thread->net_pipe };
+	iproto_thread->begin_route[1] =
+		{ net_send_msg, NULL };
+	iproto_thread->commit_route[0] =
+		{ tx_process_commit, &iproto_thread->net_pipe };
+	iproto_thread->commit_route[1] =
+		{ net_send_msg, NULL };
+	iproto_thread->rollback_route[0] =
+		{ tx_process_rollback, &iproto_thread->net_pipe };
+	iproto_thread->rollback_route[1] =
+		{ net_send_msg, NULL };
 	iproto_thread->destroy_stream_on_disconnect_route[0] =
 		{ tx_process_destroy_stream_on_disconnect,
 		  &iproto_thread->net_pipe };
@@ -2543,6 +2767,9 @@ iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 	iproto_thread->dml_route[12] = NULL;
 	/* IPROTO_PREPARE */
 	iproto_thread->dml_route[13] = iproto_thread->sql_route;
+	iproto_thread->dml_route[14] = iproto_thread->begin_route;
+	iproto_thread->dml_route[15] = iproto_thread->commit_route;
+	iproto_thread->dml_route[16] = iproto_thread->rollback_route;
 	iproto_thread->connect_route[0] =
 		{ tx_process_connect, &iproto_thread->net_pipe };
 	iproto_thread->connect_route[1] = { net_send_greeting, NULL };

@@ -115,6 +115,9 @@ local method_encoder = {
     min     = internal.encode_select,
     max     = internal.encode_select,
     count   = internal.encode_call,
+    begin   = internal.encode_begin,
+    commit  = internal.encode_commit,
+    rollback = internal.encode_rollback,
     -- inject raw data into connection, used by console and tests
     inject = function(buf, id, stream_id, bytes) -- luacheck: no unused args
         local ptr = buf:reserve(#bytes)
@@ -143,6 +146,9 @@ local method_decoder = {
     count   = decode_count,
     inject  = decode_data,
     push    = decode_push,
+    begin   = decode_nil,
+    commit  = decode_nil,
+    rollback = decode_nil,
 }
 
 local function decode_error(raw_data)
@@ -1148,6 +1154,33 @@ function stream_methods:stream()
     return self
 end
 
+function stream_methods:begin(opts)
+    check_remote_arg(self, 'begin')
+    local res = self:_request('begin', opts, nil, self._stream_id)
+    if type(res) ~= 'table' or opts and opts.is_async then
+        return nothing_or_data(res)
+    end
+    return unpack(res)
+end
+
+function stream_methods:commit(opts)
+    check_remote_arg(self, 'commit')
+    local res = self:_request('commit', opts, nil, self._stream_id)
+    if type(res) ~= 'table' or opts and opts.is_async then
+        return nothing_or_data(res)
+    end
+    return unpack(res)
+end
+
+function stream_methods:rollback(opts)
+    check_remote_arg(self, 'rollback')
+    local res = self:_request('rollback', opts, nil, self._stream_id)
+    if type(res) ~= 'table' or opts and opts.is_async then
+        return nothing_or_data(res)
+    end
+    return unpack(res)
+end
+
 function remote_methods:_wrap_spaces_and_indices(stream, stream_id)
     if self.space then
         stream.space = {}
@@ -1190,6 +1223,9 @@ function remote_methods:stream(stream_id)
     self:_wrap_spaces_and_indices(stream, stream_id)
     stream.reload_schema = stream_methods.reload_schema
     stream.stream = stream_methods.stream
+    stream.begin = stream_methods.begin
+    stream.commit = stream_methods.commit
+    stream.rollback = stream_methods.rollback
     self._streams[stream_id] = stream
     return stream
 end
