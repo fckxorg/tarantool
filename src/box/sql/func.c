@@ -1107,10 +1107,12 @@ quoteFunc(sql_context * context, int argc, sql_value ** argv)
 			sql_snprintf(sizeof(zBuf), zBuf, "%!.15g", r1);
 			sqlAtoF(zBuf, &r2, 20);
 			if (r1 != r2) {
-			    printf("r1 != r2");
+			    printf("r1 != r2\n");
 				sql_snprintf(sizeof(zBuf), zBuf, "%!.20e",
 						 r1);
 			}
+            printf("r1: %.20e\n", r1);
+			printf("r2: %.20e\n", r2);
 			sql_result_text(context, zBuf, -1,
 					    SQL_TRANSIENT);
 			break;
