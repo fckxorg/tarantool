@@ -1275,7 +1275,9 @@ mem_get_uint(const struct Mem *mem, uint64_t *u)
 int
 mem_get_double(const struct Mem *mem, double *d)
 {
+    printf("mem_get_double\n");
 	if (mem->type == MEM_TYPE_DOUBLE) {
+	    printf("mem->type == MEM_TYPE_DOUBLE\n");
 		*d = mem->u.r;
 		return 0;
 	}
@@ -1288,10 +1290,12 @@ mem_get_double(const struct Mem *mem, double *d)
 		return 0;
 	}
 	if (mem->type == MEM_TYPE_STR) {
+        printf("mem->type == MEM_TYPE_STR\n");
 		if (sqlAtoF(mem->z, d, mem->n) == 0)
 			return -1;
 		return 0;
 	}
+    printf("mem_get_double end\n");
 	return -1;
 }
 
