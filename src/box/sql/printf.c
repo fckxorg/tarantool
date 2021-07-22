@@ -537,15 +537,19 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 					scale *= 10.0;
 					exp++;
 				}
+				printf("1 realvalue is: %.20Le\n", realvalue);
 				realvalue /= scale;
+				printf("2 realvalue is: %.20Le\n", realvalue);
 				while (realvalue < 1e-8) {
 					realvalue *= 1e8;
 					exp -= 8;
 				}
+				printf("3 realvalue is: %.20Le\n", realvalue);
 				while (realvalue < 1.0) {
 					realvalue *= 10.0;
 					exp--;
 				}
+				printf("4 realvalue is: %.20Le\n", realvalue);
 				if (exp > 350) {
 					bufpt = buf;
 					buf[0] = prefix;
@@ -566,6 +570,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 					exp++;
 				}
 			}
+			printf("6 realvalue is: %.20Le\n", realvalue);
 			if (xtype == etGENERIC) {
 				flag_rtz = !flag_alternateform;
 				if (exp < -4 || exp > precision) {
@@ -584,7 +589,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			} else {
 				e2 = exp;
 			}
-			printf("realvalue is: %.20Le\n", realvalue);
+			printf("7 realvalue is: %.20Le\n", realvalue);
 			if (MAX(e2, 0) + (i64) precision + (i64) width >
 			    etBUFSIZE - 15) {
 				bufpt = zExtra =
