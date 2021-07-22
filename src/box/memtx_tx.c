@@ -1338,6 +1338,9 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 		 * The old_tuple is deleted (and obviously not NULL).
 		 * Just for understanding, that's a DELETE statement.
 		 */
+		if (old_tuple->is_dirty) {
+		} else {
+		}
 	}
 
 	/* Purge found conflicts. */
@@ -1492,52 +1495,13 @@ memtx_tx_history_rollback_stmt(struct txn_stmt *stmt)
 }
 
 /**
- * Helper of memtx_tx_history_prepare_stmt. Requirements:
- * 1. Given @a story is added by TX that is now promoted to prepared state.
- * 2. It overwrites some older story (checked by assert).
- * This older story has a list of statements that are about to delete that
- * older story. Some of them are bound to delete exactly old tuple,
- * some - just delete a key.
- * This function aborts those TXs that are bound, and rebinds all delete
- * statements to this story instead of old story.
+ * Helper of memtx_tx_history_prepare_stmt. Do the job in case when
+ * stmt->add_story != NULL, that is REPLACE, INSERT, UPDATE etc.
  */
 static void
-memtx_tx_history_prepare_handle_del_stmt(struct memtx_story *story)
+memtx_tx_history_prepare_insert_stmt(struct txn_stmt *stmt)
 {
-	struct txn_stmt *stmt = story->add_stmt;
-	struct memtx_story *old_story = story->link[0].older_story;
-	assert(old_story != NULL);
-	assert(stmt->del_story == old_story);
-
-	struct txn_stmt **dels = &old_story->del_stmt;
-	assert(*dels != NULL);
-	do {
-		assert((*dels)->del_story == old_story);
-		if ((*dels)->txn == stmt->txn) {
-			/* Leave it in list. */
-			dels = &((*dels)->next_in_del_list);
-		} else {
-			if ((*dels)->does_require_old_tuple)
-				/* Conflict, remove from list. */
-				memtx_tx_handle_conflict(stmt->txn,
-							 (*dels)->txn);
-			/* Rebind to story. */
-			(*dels)->del_story = story;
-			struct txn_stmt *save_next = (*dels)->next_in_del_list;
-			/* 1) Link to story's list. */
-			(*dels)->next_in_del_list = story->del_stmt;
-			story->del_stmt = *(dels);
-			/* 2) Unlink to old_story's list. */
-			*dels = save_next;
-		}
-	} while (*dels != NULL);
-}
-
-void
-memtx_tx_history_prepare_stmt(struct txn_stmt *stmt)
-{
-	assert(stmt->txn->psn != 0);
-
+	assert(stmt->add_story != NULL);
 	/**
 	 * History of a key in an index can consist of several stories.
 	 * The list of stories is started with a dirty tuple that is in index.
@@ -1550,145 +1514,56 @@ memtx_tx_history_prepare_stmt(struct txn_stmt *stmt)
 	 * prepared.
 	 */
 	struct memtx_story *story = stmt->add_story;
-	uint32_t index_count = story == NULL ? 0 : story->index_count;
+	uint32_t index_count = story->index_count;
 	/*
 	 * That's a common loop for both index iteration and sequential push
 	 * of the story down in lists of stories.
-	 * Note that if stmt->add_story == NULL, the index_count is set to 0,
-	 * and we will not enter the loop.
 	 */
-	for (uint32_t i = 0; i < index_count; ) {
+	for (uint32_t i = 0; i < story->index_count; ) {
 		struct memtx_story *old_story = story->link[i].older_story;
-		if (old_story == NULL) {
-			i++;
+		if (old_story == NULL || old_story->add_psn != 0 ||
+		    old_story->add_stmt == NULL) {
+			/* Old story is absent or prepared or committed. */
+			i++; /* Go to the next index. */
 			continue;
 		}
+		memtx_tx_story_reorder(story, old_story, i);
+	}
 
-		/*
-		 * We have a story that overwrites an old_story.
-		 * But there could be other transactions that are about to
-		 * delete the same old_story. If such a transaction requires
-		 * exact tuple to be deleted - it must be aborted. If it just
-		 * deletes a key without specifying the tuple - it must be
-		 * relinked to delete current story.
-		 */
-		if (i == 0)
-			memtx_tx_history_prepare_handle_del_stmt(story);
+	for (uint32_t i = 0; i < index_count; i++) {
+		struct memtx_story *old_story = story->link[i].older_story;
+		if (old_story == NULL)
+			continue;
 
 		struct tx_read_tracker *tracker;
 		rlist_foreach_entry(tracker, &old_story->reader_list,
 				    in_reader_list) {
 			if (tracker->reader == stmt->txn)
 				continue;
-			if (tracker->reader->status != TXN_INPROGRESS)
-				continue;
-			memtx_tx_handle_conflict(stmt->txn,
-						 tracker->reader);
-		}
-
-		bool old_story_is_prepared = old_story->add_psn != 0 ||
-					     old_story->add_stmt == NULL;
-		if (old_story_is_prepared) {
-			i++;
-			continue;
-		}
-
-		bool cross_conflict = false;
-		if (stmt->does_require_old_tuple) {
-			cross_conflict = true;
-		} else if (i != 0) {
-			struct memtx_story *look_up = story;
-			cross_conflict = true;
-			while (look_up->link[0].newer_story != NULL) {
-				struct memtx_story *over;
-				over = look_up->link[0].newer_story;
-				if (over->add_stmt->txn == stmt->txn) {
-					cross_conflict = false;
-					break;
-				}
-				look_up = over;
-			}
-		}
-		if (cross_conflict)
-			memtx_tx_handle_conflict(stmt->txn,
-						 old_story->add_stmt->txn);
-
-		/*
-		 * Swap story and old story in terms of list.
-		 * We have a list of stories, and we have to reoreder it.
-		 *           What we have                 What we want
-		 *      [ index/newer_story ]        [ index/newer_story ]
-		 *      [       story       ]        [     old_story     ]
-		 *      [     old_story     ]        [       story       ]
-		 *      [    older_story    ]        [    older_story    ]
-		 */
-		struct memtx_story *newer_story = story->link[i].newer_story;
-		struct memtx_story *older_story = old_story->link[i].older_story;
-		if (newer_story == NULL) {
-			/* We have to replace the tuple in index. */
-			struct tuple *unused;
-			struct index *index = stmt->space->index[i];
-			if (index_replace(index, story->tuple, old_story->tuple,
-					  DUP_INSERT, &unused, &unused) != 0) {
-				diag_log();
-				panic("failed to rollback change");
-			}
-			if (i == 0) {
-				/*
-				 * A space holds references to all his tuples.
-				 * All tuples that are physically in the primary
-				 * index are referenced. Thus we have to
-				 * reference a tuple that is added to the
-				 * primary index and dereference a tuple that
-				 * is removed from it.
-				 */
-				tuple_ref(old_story->tuple);
-				tuple_unref(story->tuple);
-			}
-		} else {
-			/* Just relink in list. */
-			assert(newer_story->link[i].older_story == story);
-			memtx_tx_story_unlink(newer_story, i);
-			memtx_tx_story_link(newer_story, old_story, i);
-		}
-		memtx_tx_story_unlink(story, i);
-		memtx_tx_story_unlink(old_story, i);
-		memtx_tx_story_link(story, older_story, i);
-		memtx_tx_story_link(old_story, story, i);
-
-		if (i == 0) {
-			/*
-			 * Now relink del lists after story reorder that made
-			 * above.
-			 */
-			struct txn_stmt *older_del_list =
-				older_story != NULL ? older_story->del_stmt
-						    : NULL;
-			struct txn_stmt *lists[3] = {older_del_list,
-						     old_story->del_stmt,
-						     story->del_stmt};
-			struct memtx_story *stories[3] = {story, older_story,
-							  old_story};
-			for (size_t j = 0; j < 3; j++) {
-				if (stories[j] != NULL)
-					stories[j]->del_stmt = lists[j];
-				for (struct txn_stmt *dels = lists[j];
-				     dels != NULL;
-				     dels = dels->next_in_del_list) {
-					dels->del_story = stories[j];
-				}
-			}
+			memtx_tx_handle_conflict(stmt->txn, tracker->reader);
 		}
 	}
+}
 
-	if (stmt->add_story == NULL) {
+/**
+ * Helper of memtx_tx_history_prepare_stmt. Do the job in case when
+ * stmt->add_story == NULL, that is DELETE etc.
+ */
+static void
+memtx_tx_history_prepare_delete_stmt(struct txn_stmt *stmt)
+{
+}
+
+void
+memtx_tx_history_prepare_stmt(struct txn_stmt *stmt)
+{
+	assert(stmt->txn->psn != 0);
+
+	if (stmt->add_story != NULL) {
+		memtx_tx_history_prepare_insert_stmt(stmt);
+	} else {
 		assert(stmt->del_story != NULL);
-		// Let's conflict all other deleting stories.
-		for (struct txn_stmt *dels = stmt->del_story->del_stmt;
-		     dels != NULL; dels = dels->next_in_del_list) {
-			if (dels->txn != stmt->txn)
-				memtx_tx_handle_conflict(stmt->txn, dels->txn);
-		}
+		memtx_tx_history_prepare_delete_stmt(stmt);
 	}
 
 	if (stmt->add_story != NULL)

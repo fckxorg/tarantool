@@ -773,6 +773,82 @@ for _,fib in pairs(fibers) do fib:join() end
 
 s:drop()
 
+-- Same key in primary, different in secondary.
+s = box.schema.create_space('test')
+pk = s:create_index('pk', {parts={1, 'uint'}})
+sk = s:create_index('sk', {parts={2, 'uint'}})
+s:replace{1, 1}
+tx1:begin()
+tx1('s:replace{1, 2}')
+tx2:begin()
+tx2('s:replace{1, 3}')
+tx1('sk:select{1}')
+tx2('sk:select{1}')
+tx1:rollback();
+tx2:rollback();
+s:drop()
+
+-- More complex conflict in secondary index.
+s = box.schema.create_space('test')
+pk = s:create_index('pk', {parts={1, 'uint'}})
+sk = s:create_index('pk', {parts={2, 'uint'}})
+tx1:begin()
+tx2:begin()
+tx1('s:replace{1, 1, 1}')
+tx1('s:delete{1}')
+tx1('s:replace{1, 1, 2}')
+tx2('s:replace{2, 1, 1}')
+tx2('s:delete{2}')
+tx2('s:replace{2, 1, 2}')
+tx1:commit()
+tx2:commit()
+
+s = box.schema.create_space('test')
+pk = s:create_index('pk', {parts={1, 'uint'}})
+sk = s:create_index('pk', {parts={2, 'uint'}})
+tx1:begin()
+tx2:begin()
+tx1('s:replace{1, 1, 1}')
+tx1('s:delete{1}')
+tx1('s:replace{1, 1, 2}')
+tx2('s:replace{2, 1, 1}')
+tx2('s:delete{2}')
+tx2('s:replace{2, 1, 2}')
+tx2:commit() -- note that tx2 commits first.
+tx1:commit()
+
+
+-- Double deletes
+s = box.schema.create_space('test')
+pk = s:create_index('pk', {parts={1, 'uint'}})
+tx1:begin()
+tx1('s:replace{1, 1}')
+tx1('s:delete{1}')
+tx1('s:delete{1}')
+tx2:begin()
+tx2('s:replace{1, 2}')
+tx2('s:delete{1}')
+tx2('s:delete{1}')
+tx1:commit()
+tx2:commit()
+s:select{}
+s:drop()
+
+s = box.schema.create_space('test')
+pk = s:create_index('pk', {parts={1, 'uint'}})
+tx1:begin()
+tx1('s:replace{1, 1}')
+tx1('s:delete{1}')
+tx1('s:delete{1}')
+tx2:begin()
+tx2('s:replace{1, 2}')
+tx2('s:delete{1}')
+tx2('s:delete{1}')
+tx2:commit()
+tx1:commit()
+s:select{}
+s:drop()
+
 --https://github.com/tarantool/tarantool/issues/6132
 test_run:cmd("setopt delimiter ';'")
 run_background_mvcc = true
