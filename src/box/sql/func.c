@@ -1099,25 +1099,7 @@ quoteFunc(sql_context * context, int argc, sql_value ** argv)
 	assert(argc == 1);
 	UNUSED_PARAMETER(argc);
 	switch (sql_value_type(argv[0])) {
-	case MP_DOUBLE:{
-	        printf("double\n");
-			double r1, r2;
-			char zBuf[50];
-			r1 = mem_get_double_unsafe(argv[0]);
-			sql_snprintf(sizeof(zBuf), zBuf, "%!.15g", r1);
-			printf("zbuf with len 50 before sqlAtoF: %s\n", zBuf);
-			sqlAtoF(zBuf, &r2, 20);
-			if (r1 != r2) {
-			    printf("r1 != r2\n");
-				sql_snprintf(sizeof(zBuf), zBuf, "%!.20e",
-						 r1);
-			}
-            printf("r1: %.20e\n", r1);
-			printf("r2: %.20e\n", r2);
-			sql_result_text(context, zBuf, -1,
-					    SQL_TRANSIENT);
-			break;
-		}
+	case MP_DOUBLE:
 	case MP_UINT:
 	case MP_INT:{
 			sql_result_value(context, argv[0]);
