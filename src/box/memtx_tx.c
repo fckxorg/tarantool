@@ -1487,85 +1487,34 @@ fail:
 void
 memtx_tx_history_rollback_stmt(struct txn_stmt *stmt)
 {
-	if (stmt->del_story != NULL)
-		memtx_tx_story_unlink_deleted_by(stmt->del_story, stmt);
-
 	if (stmt->add_story != NULL) {
 		assert(stmt->add_story->tuple == stmt->new_tuple);
 		struct memtx_story *story = stmt->add_story;
 
-		for (uint32_t i = 0; i < story->index_count; i++) {
-			struct memtx_story_link *link = &story->link[i];
-			if (link->newer_story == NULL) {
-				/*
-				 * We are at top of story list and thus
-				 * story->tuple is in index directly.
-				 */
-				struct tuple *unused;
-				struct index *index = stmt->space->index[i];
-				struct tuple *was = link->older_story == NULL ?
-					NULL : link->older_story->tuple;
-				if (index_replace(index, story->tuple, was,
-						  DUP_INSERT,
-						  &unused, &unused) != 0) {
-					diag_log();
-					unreachable();
-					panic("failed to rollback change");
-				}
-				/*
-				 * A space holds references to all his tuples.
-				 * It's made via primary index - all tuples that
-				 * are physically in primary index must be
-				 * referenced (a replaces tuple must be
-				 * dereferenced).
-				 */
-				if (i == 0) {
-					tuple_unref(story->tuple);
-					if (was != NULL)
-						tuple_ref(was);
-				}
-
-				memtx_tx_story_unlink(story, i);
-				continue;
-			}
-
-			assert(link->newer_story != NULL);
-			struct memtx_story *newer = link->newer_story;
-			struct memtx_story *older = link->older_story;
-			assert(newer->link[i].older_story == story);
-			assert(older == NULL ||
-			       older->link[i].newer_story == story);
-			memtx_tx_story_unlink(newer, i);
-			memtx_tx_story_unlink(story, i);
-			memtx_tx_story_link(newer, older, i);
-			assert(newer->link[i].older_story == older);
-			assert(older == NULL ||
-			       older->link[i].newer_story == newer);
-
-			if (i != 0 || older == NULL)
-				continue;
-
+		{
+			struct memtx_story_link *link = &story->link[0];
+			struct memtx_story *old_story = link->older_story;
 			/**
-			 * Relink those who delete story and
-			 * make them delete older story.
+			 * Relink those who delete story and make them
+			 * delete older story.
 			 */
-			while (story->del_stmt != NULL) {
-				struct txn_stmt *next =
-					story->del_stmt->next_in_del_list;
-				story->del_stmt->next_in_del_list =
-					older->del_stmt;
-				older->del_stmt = story->del_stmt;
-				story->del_stmt->del_story = older;
-				story->del_stmt = next;
+			if (old_story != NULL) {
 			}
+
+			memtx_tx_story_unlink_both(story, 0);
 		}
+
+		for (uint32_t i = 1; i < story->index_count; i++)
+			memtx_tx_story_unlink_both(story, i);
 
 		/* The story is no more allowed to change indexes. */
 		stmt->add_story->space = NULL;
 
-		stmt->add_story->add_stmt = NULL;
-		stmt->add_story = NULL;
+		memtx_tx_story_unlink_added_by(story, stmt);
 	}
+
+	if (stmt->del_story != NULL)
+		memtx_tx_story_unlink_deleted_by(stmt->del_story, stmt);
 }
 
 /**
