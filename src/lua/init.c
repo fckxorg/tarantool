@@ -123,6 +123,7 @@ extern char strict_lua[],
 	p_lua[], /* LuaJIT 2.1 profiler */
 	zone_lua[], /* LuaJIT 2.1 profiler */
 	/* tools.* libraries. */
+  hash_lua[],
 	bufread_lua[],
 	symtab_lua[],
 	parse_lua[],
@@ -177,6 +178,7 @@ static const char *lua_modules[] = {
 	"jit.p", p_lua,
 	"jit.zone", zone_lua,
 	/* tools.* libraries. Order is important. */
+  "utils.hash", hash_lua,
 	"utils.bufread", bufread_lua,
 	"utils.symtab", symtab_lua,
 	"memprof.parse", parse_lua,
