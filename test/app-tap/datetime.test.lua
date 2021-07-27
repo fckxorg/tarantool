@@ -6,7 +6,7 @@ local date = require('datetime')
 local ffi = require('ffi')
 
 
-test:plan(6)
+test:plan(7)
 
 test:test("Simple tests for parser", function(test)
     test:plan(2)
@@ -201,6 +201,13 @@ test:test("Parse tiny date into seconds and other parts", function(test)
     test:ok(tiny.timestamp == 30.528, "timestamp")
     test:ok(tiny.minutes == 0.5088, "minutes")
     test:ok(tiny.hours == 0.00848, "hours")
+end)
+
+test:test("Stringization of date", function(test)
+    test:plan(1)
+    local str = '19700101Z'
+    local dt = date(str)
+    test:ok(tostring(dt) == '1970-01-01T00:00Z', ('tostring(%s)'):format(str))
 end)
 
 os.exit(test:check() and 0 or 1)

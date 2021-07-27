@@ -94,3 +94,52 @@ datetime_strftime(const struct datetime *date, const char *fmt, char *buf,
 	struct tm *p_tm = datetime_to_tm(date);
 	return strftime(buf, len, fmt, p_tm);
 }
+
+int
+datetime_to_string(const struct datetime *date, char *buf, uint32_t len)
+{
+	char * src = buf;
+	int offset = date->offset;
+	int64_t secs = date->secs + offset * 60;
+	dt_t dt = dt_from_rdn((secs / SECS_PER_DAY) + 719163);
+
+	int year, month, day, sec, ns, sign;
+	dt_to_ymd(dt, &year, &month, &day);
+
+	int hour = (secs / 3600) % 24,
+	    minute = (secs / 60) % 60;
+	sec = secs % 60;
+	ns = date->nsec;
+
+	uint32_t sz = snprintf(buf, len, "%04d-%02d-%02dT%02d:%02d",
+			       year, month, day, hour, minute);
+	buf += sz; len -= sz;
+	if (sec || ns) {
+		sz = snprintf(buf, len, ":%02d", sec);
+		buf += sz; len -= sz;
+		if (ns) {
+			if ((ns % 1000000) == 0)
+				sz = snprintf(buf, len, ".%03d", ns / 1000000);
+			else if ((ns % 1000) == 0)
+				sz = snprintf(buf, len, ".%06d", ns / 1000);
+			else
+				sz = snprintf(buf, len, ".%09d", ns);
+			buf += sz; len -= sz;
+		}
+	}
+	if (offset == 0) {
+		strncpy(buf, "Z", len);
+		buf++;
+		len--;
+	}
+	else {
+		if (offset < 0)
+			sign = '-', offset = -offset;
+		else
+			sign = '+';
+
+		sz = snprintf(buf, len, "%c%02d:%02d", sign, offset / 60, offset % 60);
+		buf += sz; len -= sz;
+	}
+	return (buf - src);
+}
