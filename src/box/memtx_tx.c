@@ -1630,8 +1630,73 @@ memtx_tx_history_prepare_insert_stmt(struct txn_stmt *stmt)
 		memtx_tx_story_reorder(story, old_story, i);
 	}
 
+	struct memtx_story *old_story = story->link[0].older_story;
+	if (stmt->del_story == NULL)
+		assert(old_story == NULL || old_story->del_psn != 0);
+	else
+		assert(stmt->del_story == story->link[0].older_story);
+
+	if (stmt->del_story == NULL) {
+		/*
+		 * This statement replaced nothing. That means that before
+		 * this preparation there was no visible tuple in index, and
+		 * now there is.
+		 * There also can be some in-progress transactions that think
+		 * that the replaced nothing. Some of them must be aborted
+		 * (for example inserts, that must replace nothing), other
+		 * must be told that they replace this tuple now.
+		 */
+		struct memtx_story_link *link = &story->link[0];
+		while (link->newer_story != NULL) {
+			struct memtx_story *test = link->newer_story;
+			link = &test->link[0];
+			struct txn_stmt *test_stmt = test->add_stmt;
+			if (test_stmt->txn == stmt->txn)
+				continue;
+			if (test_stmt->del_story != stmt->del_story) {
+				assert(test_stmt->del_story->add_stmt->txn
+				       == test_stmt->txn);
+				continue;
+			}
+			if (test_stmt->does_require_old_tuple)
+				memtx_tx_handle_conflict(stmt->txn,
+							 test_stmt->txn);
+			else
+				memtx_tx_story_link_deleted_by(story,
+							       test_stmt);
+		}
+	}
+	if (old_story != NULL) {
+		/*
+		 * There can be some transactions that want to delete old_story.
+		 * It can be this transaction, or some other prepared TX.
+		 * All other transactions must be aborted or relinked to delete
+		 * this tuple.
+		 */
+		struct txn_stmt **from = &old_story->del_stmt;
+		struct txn_stmt **to = &story->del_stmt;
+		while (*test_stmt != NULL) {
+			assert((*test_stmt)->del_story == old_story);
+			if ((*test_stmt)->does_require_old_tuple) {
+				memtx_tx_handle_conflict(stmt->txn,
+							 (*test_stmt)->txn);
+				/*
+				 * memtx_tx_story_unlink_deleted_by could be
+				 * called, but it's more expensive.
+				 */
+				(*test_stmt)->del_story = NULL;
+				struct txn_stmt *tmp_stmt = *test_stmt;
+				*test_stmt = (*test_stmt)->next_in_del_list;
+				tmp_stmt->next_in_del_list = NULL;
+			} else {
+			}
+
+			test_stmt = &((*test_stmt)->next_in_del_list;
+		}
+	}
+
 	for (uint32_t i = 0; i < index_count; i++) {
-		struct memtx_story *old_story = story->link[i].older_story;
+		old_story = story->link[i].older_story;
 		if (old_story == NULL)
 			continue;
 
