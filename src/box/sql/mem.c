@@ -214,6 +214,175 @@ mem_destroy(struct Mem *mem)
 	mem->z = NULL;
 }
 
+static inline void
+set_null(struct Mem *mem, enum field_type type)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->type = MEM_TYPE_NULL;
+	mem->field_type = type;
+}
+
+static inline void
+set_int(struct Mem *mem, int64_t value, bool is_neg)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->u.i = value;
+	mem->type = is_neg ? MEM_TYPE_INT : MEM_TYPE_UINT;
+	mem->field_type = FIELD_TYPE_INTEGER;
+}
+
+static inline void
+set_uint(struct Mem *mem, uint64_t value)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->u.u = value;
+	mem->type = MEM_TYPE_UINT;
+	mem->field_type = FIELD_TYPE_UNSIGNED;
+}
+
+static inline void
+set_bool(struct Mem *mem, bool value)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->u.b = value;
+	mem->type = MEM_TYPE_BOOL;
+	mem->field_type = FIELD_TYPE_BOOLEAN;
+}
+
+static inline void
+set_double(struct Mem *mem, double value)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->field_type = FIELD_TYPE_DOUBLE;
+	if (sqlIsNaN(value))
+		return;
+	mem->u.r = value;
+	mem->type = MEM_TYPE_DOUBLE;
+}
+
+static inline void
+set_uuid(struct Mem *mem, const struct tt_uuid *value)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->field_type = FIELD_TYPE_UUID;
+	mem->u.uuid = *value;
+	mem->type = MEM_TYPE_UUID;
+}
+
+static inline void
+set_str_static(struct Mem *mem, char *value, uint32_t len)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->z = value;
+	mem->n = len;
+	mem->type = MEM_TYPE_STR;
+	mem->flags = MEM_Static;
+	mem->field_type = FIELD_TYPE_STRING;
+}
+
+static inline void
+set_str_ephemeral(struct Mem *mem, char *value, uint32_t len)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->z = value;
+	mem->n = len;
+	mem->type = MEM_TYPE_STR;
+	mem->flags = MEM_Ephem;
+	mem->field_type = FIELD_TYPE_STRING;
+}
+
+static inline void
+set_str_dynamic(struct Mem *mem, char *value, uint32_t len)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->z = value;
+	mem->n = len;
+	mem->type = MEM_TYPE_STR;
+	mem->flags = MEM_Dyn;
+	mem->field_type = FIELD_TYPE_STRING;
+	mem->xDel = sql_free;
+}
+
+static inline void
+set_str_allocated(struct Mem *mem, char *value, uint32_t len)
+{
+	assert(mem->flags == 0 && !VdbeMemDynamic(mem));
+	mem->z = value;
+	mem->n = len;
+	mem->type = MEM_TYPE_STR;
+	mem->flags = 0;
+	mem->field_type = FIELD_TYPE_STRING;
+	mem->zMalloc = mem->z;
+	mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
+}
+
+static inline void
+set_bin_static(struct Mem *mem, char *value, uint32_t size)
+{
+	mem->z = value;
+	mem->n = size;
+	mem->type = MEM_TYPE_BIN;
+	mem->flags = MEM_Static;
+	mem->field_type = FIELD_TYPE_VARBINARY;
+}
+
+static inline void
+set_bin_ephemeral(struct Mem *mem, char *value, uint32_t size)
+{
+	mem->z = value;
+	mem->n = size;
+	mem->type = MEM_TYPE_BIN;
+	mem->flags = MEM_Ephem;
+	mem->field_type = FIELD_TYPE_VARBINARY;
+}
+
+static inline void
+set_bin_dynamic(struct Mem *mem, char *value, uint32_t size)
+{
+	mem->z = value;
+	mem->n = size;
+	mem->type = MEM_TYPE_BIN;
+	mem->flags = MEM_Dyn;
+	mem->field_type = FIELD_TYPE_VARBINARY;
+	mem->xDel = sql_free;
+}
+
+static inline void
+set_bin_allocated(struct Mem *mem, char *value, uint32_t size)
+{
+	mem->z = value;
+	mem->n = size;
+	mem->type = MEM_TYPE_BIN;
+	mem->flags = 0;
+	mem->field_type = FIELD_TYPE_VARBINARY;
+	mem->xDel = NULL;
+	mem->zMalloc = mem->z;
+	mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
+}
+
+static inline void
+set_msgpack_value(struct Mem *mem, char *value, uint32_t size, int alloc_type,
+		  enum field_type type)
+{
+	assert(type == FIELD_TYPE_MAP || type == FIELD_TYPE_ARRAY);
+	switch (alloc_type) {
+	case MEM_Static:
+		set_bin_static(mem, value, size);
+		break;
+	case MEM_Ephem:
+		set_bin_ephemeral(mem, value, size);
+		break;
+	case MEM_Dyn:
+		set_bin_dynamic(mem, value, size);
+		break;
+	default:
+		assert(alloc_type == 0);
+		set_bin_allocated(mem, value, size);
+	}
+	mem->type = type == FIELD_TYPE_MAP ? MEM_TYPE_MAP : MEM_TYPE_ARRAY;
+	mem->field_type = type;
+}
+
 void
 mem_set_null(struct Mem *mem)
 {
@@ -224,136 +393,102 @@ void
 mem_set_int(struct Mem *mem, int64_t value, bool is_neg)
 {
 	mem_clear(mem);
-	mem->u.i = value;
-	mem->type = is_neg ? MEM_TYPE_INT : MEM_TYPE_UINT;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_INTEGER;
+	set_int(mem, value, is_neg);
 }
 
 void
 mem_set_uint(struct Mem *mem, uint64_t value)
 {
 	mem_clear(mem);
-	mem->u.u = value;
-	mem->type = MEM_TYPE_UINT;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_UNSIGNED;
+	set_uint(mem, value);
 }
 
 void
 mem_set_bool(struct Mem *mem, bool value)
 {
 	mem_clear(mem);
-	mem->u.b = value;
-	mem->type = MEM_TYPE_BOOL;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_BOOLEAN;
+	set_bool(mem, value);
 }
 
 void
 mem_set_double(struct Mem *mem, double value)
 {
 	mem_clear(mem);
-	mem->field_type = FIELD_TYPE_DOUBLE;
-	assert(mem->flags == 0);
-	if (sqlIsNaN(value))
-		return;
-	mem->u.r = value;
-	mem->type = MEM_TYPE_DOUBLE;
+	set_double(mem, value);
 }
 
 void
-mem_set_uuid(struct Mem *mem, const struct tt_uuid *uuid)
+mem_set_uuid(struct Mem *mem, const struct tt_uuid *value)
 {
 	mem_clear(mem);
-	mem->field_type = FIELD_TYPE_UUID;
-	mem->u.uuid = *uuid;
-	mem->type = MEM_TYPE_UUID;
-	assert(mem->flags == 0);
-}
-
-static inline void
-set_str_const(struct Mem *mem, char *value, uint32_t len, int alloc_type)
-{
-	assert((alloc_type & (MEM_Static | MEM_Ephem)) != 0);
-	mem_clear(mem);
-	mem->z = value;
-	mem->n = len;
-	mem->type = MEM_TYPE_STR;
-	mem->flags = alloc_type;
-	mem->field_type = FIELD_TYPE_STRING;
-}
-
-static inline void
-set_str_dynamic(struct Mem *mem, char *value, uint32_t len, int alloc_type)
-{
-	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
-	assert(mem->szMalloc == 0 || value != mem->zMalloc);
-	assert(alloc_type == MEM_Dyn || alloc_type == 0);
-	mem_destroy(mem);
-	mem->z = value;
-	mem->n = len;
-	mem->type = MEM_TYPE_STR;
-	mem->flags = alloc_type;
-	mem->field_type = FIELD_TYPE_STRING;
-	if (alloc_type == MEM_Dyn) {
-		mem->xDel = sql_free;
-	} else {
-		mem->xDel = NULL;
-		mem->zMalloc = mem->z;
-		mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
-	}
+	set_uuid(mem, value);
 }
 
 void
 mem_set_str_ephemeral(struct Mem *mem, char *value, uint32_t len)
 {
-	set_str_const(mem, value, len, MEM_Ephem);
+	mem_clear(mem);
+	set_str_ephemeral(mem, value, len);
 }
 
 void
 mem_set_str_static(struct Mem *mem, char *value, uint32_t len)
 {
-	set_str_const(mem, value, len, MEM_Static);
+	mem_clear(mem);
+	set_str_static(mem, value, len);
 }
 
 void
 mem_set_str_dynamic(struct Mem *mem, char *value, uint32_t len)
 {
-	set_str_dynamic(mem, value, len, MEM_Dyn);
+	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
+	assert(mem->szMalloc == 0 || value != mem->zMalloc);
+	mem_destroy(mem);
+	set_str_dynamic(mem, value, len);
 }
 
 void
 mem_set_str_allocated(struct Mem *mem, char *value, uint32_t len)
 {
-	set_str_dynamic(mem, value, len, 0);
+	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
+	assert(mem->szMalloc == 0 || value != mem->zMalloc);
+	mem_destroy(mem);
+	set_str_allocated(mem, value, len);
 }
 
 void
 mem_set_str0_ephemeral(struct Mem *mem, char *value)
 {
-	set_str_const(mem, value, strlen(value), MEM_Ephem);
+	mem_clear(mem);
+	set_str_ephemeral(mem, value, strlen(value));
 	mem->flags |= MEM_Term;
 }
 
 void
 mem_set_str0_static(struct Mem *mem, char *value)
 {
-	set_str_const(mem, value, strlen(value), MEM_Static);
+	mem_clear(mem);
+	set_str_static(mem, value, strlen(value));
 	mem->flags |= MEM_Term;
 }
 
 void
 mem_set_str0_dynamic(struct Mem *mem, char *value)
 {
-	set_str_dynamic(mem, value, strlen(value), MEM_Dyn);
+	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
+	assert(mem->szMalloc == 0 || value != mem->zMalloc);
+	mem_destroy(mem);
+	set_str_dynamic(mem, value, strlen(value));
 	mem->flags |= MEM_Term;
 }
 
 void
 mem_set_str0_allocated(struct Mem *mem, char *value)
 {
-	set_str_dynamic(mem, value, strlen(value), 0);
+	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
+	assert(mem->szMalloc == 0 || value != mem->zMalloc);
+	mem_destroy(mem);
+	set_str_allocated(mem, value, strlen(value));
 	mem->flags |= MEM_Term;
 }
 
@@ -365,19 +500,19 @@ mem_copy_str(struct Mem *mem, const char *value, uint32_t len)
 		/* Own value, but might be ephemeral. Make it own if so. */
 		if (sqlVdbeMemGrow(mem, len, 1) != 0)
 			return -1;
-		mem->type = MEM_TYPE_STR;
-		mem->flags = 0;
-		mem->field_type = FIELD_TYPE_STRING;
+		set_str_allocated(mem, mem->z, len);
 		return 0;
 	}
 	mem_clear(mem);
+	if (len == 0) {
+		set_str_static(mem, "", 0);
+		mem->flags |= MEM_Term;
+		return 0;
+	}
 	if (sqlVdbeMemGrow(mem, len, 0) != 0)
 		return -1;
 	memcpy(mem->z, value, len);
-	mem->n = len;
-	mem->type = MEM_TYPE_STR;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_STRING;
+	set_str_allocated(mem, mem->z, len);
 	return 0;
 }
 
@@ -392,61 +527,36 @@ mem_copy_str0(struct Mem *mem, const char *value)
 	return 0;
 }
 
-static inline void
-set_bin_const(struct Mem *mem, char *value, uint32_t size, int alloc_type)
-{
-	assert((alloc_type & (MEM_Static | MEM_Ephem)) != 0);
-	mem_clear(mem);
-	mem->z = value;
-	mem->n = size;
-	mem->type = MEM_TYPE_BIN;
-	mem->flags = alloc_type;
-	mem->field_type = FIELD_TYPE_VARBINARY;
-}
-
-static inline void
-set_bin_dynamic(struct Mem *mem, char *value, uint32_t size, int alloc_type)
-{
-	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
-	assert(mem->szMalloc == 0 || value != mem->zMalloc);
-	assert(alloc_type == MEM_Dyn || alloc_type == 0);
-	mem_destroy(mem);
-	mem->z = value;
-	mem->n = size;
-	mem->type = MEM_TYPE_BIN;
-	mem->flags = alloc_type;
-	mem->field_type = FIELD_TYPE_VARBINARY;
-	if (alloc_type == MEM_Dyn) {
-		mem->xDel = sql_free;
-	} else {
-		mem->xDel = NULL;
-		mem->zMalloc = mem->z;
-		mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
-	}
-}
-
 void
 mem_set_bin_ephemeral(struct Mem *mem, char *value, uint32_t size)
 {
-	set_bin_const(mem, value, size, MEM_Ephem);
+	mem_clear(mem);
+	set_bin_ephemeral(mem, value, size);
 }
 
 void
 mem_set_bin_static(struct Mem *mem, char *value, uint32_t size)
 {
-	set_bin_const(mem, value, size, MEM_Static);
+	mem_clear(mem);
+	set_bin_static(mem, value, size);
 }
 
 void
 mem_set_bin_dynamic(struct Mem *mem, char *value, uint32_t size)
 {
-	set_bin_dynamic(mem, value, size, MEM_Dyn);
+	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
+	assert(mem->szMalloc == 0 || value != mem->zMalloc);
+	mem_destroy(mem);
+	set_bin_dynamic(mem, value, size);
 }
 
 void
 mem_set_bin_allocated(struct Mem *mem, char *value, uint32_t size)
 {
-	set_bin_dynamic(mem, value, size, 0);
+	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
+	assert(mem->szMalloc == 0 || value != mem->zMalloc);
+	mem_destroy(mem);
+	set_bin_allocated(mem, value, size);
 }
 
 int
@@ -457,19 +567,18 @@ mem_copy_bin(struct Mem *mem, const char *value, uint32_t size)
 		/* Own value, but might be ephemeral. Make it own if so. */
 		if (sqlVdbeMemGrow(mem, size, 1) != 0)
 			return -1;
-		mem->type = MEM_TYPE_BIN;
-		mem->flags = 0;
-		mem->field_type = FIELD_TYPE_VARBINARY;
+		set_bin_allocated(mem, mem->z, size);
 		return 0;
 	}
 	mem_clear(mem);
+	if (size == 0) {
+		set_bin_static(mem, NULL, 0);
+		return 0;
+	}
 	if (sqlVdbeMemGrow(mem, size, 0) != 0)
 		return -1;
 	memcpy(mem->z, value, size);
-	mem->n = size;
-	mem->type = MEM_TYPE_BIN;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_VARBINARY;
+	set_bin_allocated(mem, mem->z, size);
 	return 0;
 }
 
@@ -477,27 +586,9 @@ void
 mem_set_zerobin(struct Mem *mem, int n)
 {
 	mem_destroy(mem);
-	if (n < 0)
-		n = 0;
-	mem->u.nZero = n;
-	mem->z = NULL;
-	mem->n = 0;
-	mem->type = MEM_TYPE_BIN;
-	mem->flags = MEM_Zero;
-	mem->field_type = FIELD_TYPE_VARBINARY;
-}
-
-static inline void
-set_msgpack_value(struct Mem *mem, char *value, uint32_t size, int alloc_type,
-		  enum field_type type)
-{
-	assert(type == FIELD_TYPE_MAP || type == FIELD_TYPE_ARRAY);
-	if (alloc_type == MEM_Ephem || alloc_type == MEM_Static)
-		set_bin_const(mem, value, size, alloc_type);
-	else
-		set_bin_dynamic(mem, value, size, alloc_type);
-	mem->type = type == FIELD_TYPE_MAP ? MEM_TYPE_MAP : MEM_TYPE_ARRAY;
-	mem->field_type = type;
+	set_bin_static(mem, NULL, 0);
+	mem->u.nZero = n < 0 ? 0 : n;
+	mem->flags |= MEM_Zero;
 }
 
 void
@@ -615,10 +706,7 @@ int_to_double(struct Mem *mem)
 		d = (double)mem->u.u;
 	else
 		d = (double)mem->u.i;
-	mem->u.r = d;
-	mem->type = MEM_TYPE_DOUBLE;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_DOUBLE;
+	set_double(mem, d);
 	return 0;
 }
 
@@ -638,10 +726,7 @@ static inline int
 int_to_bool(struct Mem *mem)
 {
 	assert((mem->type & (MEM_TYPE_INT | MEM_TYPE_UINT)) != 0);
-	mem->u.b = mem->u.i != 0;
-	mem->type = MEM_TYPE_BOOL;
-	assert(mem->flags == 0);
-	mem->field_type = FIELD_TYPE_BOOLEAN;
+	set_bool(mem, mem->u.i != 0);
 	return 0;
 }
 
