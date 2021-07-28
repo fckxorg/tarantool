@@ -454,7 +454,7 @@ memtx_tx_story_link_deleted_by(struct memtx_story *story,
 			       struct txn_stmt *stmt)
 {
 	assert(stmt->del_story == NULL);
-	assert(stmt->next_in_del_list = NULL);
+	assert(stmt->next_in_del_list == NULL);
 
 	stmt->del_story = story;
 	stmt->next_in_del_list = story->del_stmt;
@@ -612,7 +612,6 @@ memtx_tx_story_unlink_top_light(struct memtx_story *story, uint32_t idx)
 	struct memtx_story_link *link = &story->link[idx];
 
 	assert(link->newer_story == NULL);
-	struct index *index = story->space->index[idx];
 
 	struct memtx_story *old_story = link->older_story;
 	if (old_story != NULL) {
@@ -688,7 +687,7 @@ memtx_tx_story_unlink_both(struct memtx_story *story, uint32_t idx)
 		struct memtx_story *older_story = link->older_story;
 		memtx_tx_story_unlink(newer_story, story, idx);
 		memtx_tx_story_unlink(story, older_story, idx);
-		memtx_tx_story_link(newer_story, older_story);
+		memtx_tx_story_link(newer_story, older_story, idx);
 	}
 }
 
@@ -770,14 +769,14 @@ memtx_tx_story_full_unlink(struct memtx_story *story)
 			/*
 			 * If there is older story, we must unlink it, and
 			 * it will become at the top of chain. On the other
-			 * hand we have just handeled top of chain removal and
+			 * hand we have just handled top of chain removal and
 			 * must not repeat this actions. We can do it by
 			 * clearing the space.
 			 */
 			if (link->older_story != NULL)
 				link->older_story->space = NULL;
 
-			memtx_tx_story_unlink(story, i);
+			memtx_tx_story_unlink(story, link->older_story, i);
 		} else {
 			/* Just unlink from list */
 			link->newer_story->link[i].older_story = link->older_story;
@@ -1666,6 +1665,7 @@ memtx_tx_history_prepare_insert_stmt(struct txn_stmt *stmt)
 							       test_stmt);
 		}
 	}
+
 	if (old_story != NULL) {
 		/*
 		 * There can be some transactions that want to delete old_story.
@@ -1675,23 +1675,30 @@ memtx_tx_history_prepare_insert_stmt(struct txn_stmt *stmt)
 		 */
 		struct txn_stmt **from = &old_story->del_stmt;
 		struct txn_stmt **to = &story->del_stmt;
-		while (*test_stmt != NULL) {
-			assert((*test_stmt)->del_story == old_story);
-			if ((*test_stmt)->does_require_old_tuple) {
-				memtx_tx_handle_conflict(stmt->txn,
-							 (*test_stmt)->txn);
-				/*
-				 * memtx_tx_story_unlink_deleted_by could be
-				 * called, but it's more expensive.
-				 */
-				(*test_stmt)->del_story = NULL;
-				struct txn_stmt *tmp_stmt = *test_stmt;
-				*test_stmt = (*test_stmt)->next_in_del_list;
-				tmp_stmt->next_in_del_list = NULL;
-			} else {
+		while (*to != NULL)
+			to = &((*to)->next_in_del_list);
+		while (*from != NULL) {
+			struct txn_stmt *test_stmt = *from;
+			assert(test_stmt->del_story == old_story);
+			if (test_stmt == stmt && test_stmt->txn->psn != 0) {
+				/* This or prepared. Go to the next stmt. */
+				from = &test_stmt->next_in_del_list;
+				continue;
 			}
+			/* Unlink from old list in any case. */
+			*from = test_stmt->next_in_del_list;
+			test_stmt->next_in_del_list = NULL;
+			test_stmt->del_story = NULL;
 
-			test_stmt = &((*test_stmt)->next_in_del_list;
+			if (test_stmt->does_require_old_tuple) {
+				memtx_tx_handle_conflict(stmt->txn,
+							 test_stmt->txn);
+			} else {
+				/* Link to story's list. */
+				test_stmt->del_story = story;
+				*to = test_stmt;
+				to = &test_stmt->next_in_del_list;
+			}
 		}
 	}
 
@@ -1717,6 +1724,38 @@ memtx_tx_history_prepare_insert_stmt(struct txn_stmt *stmt)
 static void
 memtx_tx_history_prepare_delete_stmt(struct txn_stmt *stmt)
 {
+	assert(stmt->add_story == NULL);
+	assert(stmt->del_story != NULL);
+
+	struct memtx_story *story = stmt->del_story;
+	/*
+	 * There can be some transactions that want to delete old_story.
+	 * All other transactions must be aborted.
+	 */
+	struct txn_stmt **itr = &story->del_stmt;
+	while (*itr != NULL) {
+		struct txn_stmt *test_stmt = *itr;
+		assert(test_stmt->del_story == story);
+		if (test_stmt == stmt && test_stmt->txn->psn != 0) {
+			/* This statement. Go to the next stmt. */
+			itr = &test_stmt->next_in_del_list;
+			continue;
+		}
+		/* Unlink from old list in any case. */
+		*itr = test_stmt->next_in_del_list;
+		test_stmt->next_in_del_list = NULL;
+		test_stmt->del_story = NULL;
+		assert(test_stmt->does_require_old_tuple);
+		memtx_tx_handle_conflict(stmt->txn,
+					 test_stmt->txn);
+	}
+
+	struct tx_read_tracker *tracker;
+	rlist_foreach_entry(tracker, &story->reader_list, in_reader_list) {
+		if (tracker->reader == stmt->txn)
+			continue;
+		memtx_tx_handle_conflict(stmt->txn, tracker->reader);
+	}
 }
 
 void
@@ -1740,7 +1779,7 @@ memtx_tx_history_prepare_stmt(struct txn_stmt *stmt)
 ssize_t
 memtx_tx_history_commit_stmt(struct txn_stmt *stmt)
 {
-	size_t res = 0;
+	ssize_t res = 0;
 	if (stmt->add_story != NULL) {
 		assert(stmt->add_story->add_stmt == stmt);
 		res += stmt->add_story->tuple->bsize;

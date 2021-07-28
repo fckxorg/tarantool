@@ -850,6 +850,7 @@ tx2('s:delete{2}')
 tx2('s:replace{2, 1, 2}')
 tx1:commit()
 tx2:commit()
+s:drop()
 
 s = box.schema.create_space('test')
 pk = s:create_index('pk', {parts={1, 'uint'}})
@@ -864,6 +865,7 @@ tx2('s:delete{2}')
 tx2('s:replace{2, 1, 2}')
 tx2:commit() -- note that tx2 commits first.
 tx1:commit()
+s:drop()
 
 -- Double deletes
 s = box.schema.create_space('test')
