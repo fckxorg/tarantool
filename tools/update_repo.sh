@@ -19,6 +19,8 @@ aws="aws --endpoint-url ${AWS_S3_ENDPOINT_URL:-https://hb.bizmrg.com} s3"
 aws_cp_public="$aws cp --acl public-read"
 aws_sync_public="$aws sync --acl public-read"
 
+arch=$(rpm --eval '%{_arch}' || dpkg --print-architecture)
+
 function get_os_dists {
     os=$1
     alldists=
@@ -538,7 +540,7 @@ Origin: Tarantool
 Label: tarantool.org
 Suite: stable
 Codename: $loop_dist
-Architectures: amd64 source
+Architectures: amd64 arm64 source
 Components: $component
 Description: Tarantool DBMS and Tarantool modules
 SignWith: $GPG_SIGN_KEY
@@ -558,6 +560,10 @@ EOF
         initiate_deb_metadata dists/$loop_dist/$component/binary-amd64/Packages
         for deb in $ws/$debdir/$loop_dist/$component/*/*/*.deb ; do
             [ -f $deb ] || continue
+            if [[ "$arch" != "x86_64" && \
+                  "$deb" != "_${arch}.deb" ]]; then
+              continue
+            fi
             updated_deb=0
             # regenerate DEB pack
             update_deb_packfile $deb deb $loop_dist
@@ -579,6 +585,10 @@ EOF
         initiate_deb_metadata dists/$loop_dist/$component/source/Sources
         for dsc in $ws/$debdir/$loop_dist/$component/*/*/*.dsc ; do
             [ -f $dsc ] || continue
+            if [[ "$arch" != "x86_64" && \
+                  "$deb" != "_${arch}.deb" ]]; then
+              continue
+            fi
             updated_dsc=0
             # regenerate DSC pack
             update_deb_packfile $dsc dsc $loop_dist
@@ -888,7 +898,7 @@ function remove_rpm {
     # presented in the metadata. However it is possible that some
     # broken update left orphan files: they are present in the
     # storage, but does not mentioned in the metadata.
-    for suffix in 'x86_64' 'noarch' 'src'; do
+    for suffix in 'noarch' 'src' "$arch"; do
         if [ "$os" == "opensuse-leap" ]; then
             # Open Build Service (openSUSE) does not follow the usual
             # approach: 'Release' is like lp152.1.1, where the first
@@ -981,9 +991,9 @@ elif [ "$os" == "el" -o "$os" == "fedora" -o "$os" == "opensuse-leap" ]; then
     # prepare the workspace
     prepare_ws ${os}_${option_dist}
     if [ "$remove" != "" ]; then
-        remove_rpm x86_64 "-1.*.x86_64.rpm -1.*.noarch.rpm"
+        remove_rpm "$arch"  "-1.*.${arch}.rpm -1.*.noarch.rpm"
     else
-        pack_rpm x86_64 "*.x86_64.rpm *.noarch.rpm"
+        pack_rpm "$arch" "*.${arch}.rpm *.noarch.rpm"
     fi
     # unlock the publishing
     $rm_file $ws_lockfile
@@ -994,14 +1004,16 @@ elif [ "$os" == "el" -o "$os" == "fedora" -o "$os" == "opensuse-leap" ]; then
     if [ "$remove" != "" ]; then
         remove_rpm SRPMS "-1.*.src.rpm"
     else
-        pack_rpm SRPMS "*.src.rpm"
+        if [ "$arch" == "x86_64" ]; then
+          pack_rpm SRPMS "*.src.rpm"
+        fi
     fi
     # unlock the publishing
     $rm_file $ws_lockfile
     popd 2>/dev/null || true
 
     if [ "$remove" == "" -a "$packed_rpms" == "" ]; then
-        echo "ERROR: Current '$repo' path doesn't have '*.x86_64.rpm *.noarch.rpm *.src.rpm' packages in path"
+        echo "ERROR: Current '$repo' path doesn't have '*.${arch}.rpm *.noarch.rpm *.src.rpm' packages in path"
         usage
         exit 1
     fi
