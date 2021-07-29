@@ -14,11 +14,14 @@ jobs:
     if: ( github.event_name == 'push' ||
         github.event.pull_request.head.repo.full_name != github.repository ) &&
         ! endsWith(github.ref, '-notest')
-
-    runs-on: ubuntu-20.04
-
     strategy:
       fail-fast: false
+      matrix:
+        config:
+          - os: ubuntu-20.04
+          - os: odroid-arm64
+
+    runs-on: ${{ matrix.config.os }}
 
     steps:
       # Permissions correction is needed for self-host runners,
