@@ -44,6 +44,7 @@ jobs:
           RELEASE_REPO_S3_DIR: ${{ secrets.RELEASE_REPO_S3_DIR }}
           GPG_SECRET_KEY: ${{ secrets.GPG_SECRET_KEY }}
           GPG_SIGN_KEY: ${{ secrets.GPG_SIGN_KEY }}
+          DOCKER_REPO: 'vitaliiaioffe/tarantool'
           OS: 'debian'
           DIST: 'buster'
         uses: ./.github/actions/pack_and_deploy
