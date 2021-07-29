@@ -1343,11 +1343,11 @@ memtx_tx_handle_gap_write(struct txn *txn, struct space *space,
  * UPDATE, and old_tuple is not NULL and is the updated tuple.
  */
 static int
-memtx_tx_history_add_replace_stmt(struct txn_stmt *stmt,
-				  struct tuple *old_tuple,
-				  struct tuple *new_tuple,
-				  enum dup_replace_mode mode,
-				  struct tuple **result)
+memtx_tx_history_add_insert_stmt(struct txn_stmt *stmt,
+				 struct tuple *old_tuple,
+				 struct tuple *new_tuple,
+				 enum dup_replace_mode mode,
+				 struct tuple **result)
 {
 	assert(new_tuple != NULL);
 
@@ -1552,9 +1552,9 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 	assert(result == &stmt->old_tuple);
 
 	if (new_tuple != NULL)
-		return memtx_tx_history_add_replace_stmt(stmt, old_tuple,
-							 new_tuple, mode,
-							 result);
+		return memtx_tx_history_add_insert_stmt(stmt, old_tuple,
+							new_tuple, mode,
+							result);
 	else
 		return memtx_tx_history_add_delete_stmt(stmt, old_tuple,
 							result);
@@ -1745,9 +1745,9 @@ memtx_tx_history_prepare_delete_stmt(struct txn_stmt *stmt)
 		*itr = test_stmt->next_in_del_list;
 		test_stmt->next_in_del_list = NULL;
 		test_stmt->del_story = NULL;
-		assert(test_stmt->does_require_old_tuple);
-		memtx_tx_handle_conflict(stmt->txn,
-					 test_stmt->txn);
+		/* Conflict only in case of dependance. */
+		if (test_stmt->does_require_old_tuple)
+			memtx_tx_handle_conflict(stmt->txn, test_stmt->txn);
 	}
 
 	struct tx_read_tracker *tracker;
