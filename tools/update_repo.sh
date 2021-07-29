@@ -538,7 +538,7 @@ Origin: Tarantool
 Label: tarantool.org
 Suite: stable
 Codename: $loop_dist
-Architectures: amd64 source
+Architectures: amd64 arm64 source
 Components: $component
 Description: Tarantool DBMS and Tarantool modules
 SignWith: $GPG_SIGN_KEY
