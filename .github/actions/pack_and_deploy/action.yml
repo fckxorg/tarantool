@@ -9,6 +9,7 @@ runs:
         # on it: app-tap/gh-4983-tnt-e-assert-false-hangs.test.lua.
         echo PACKPACK_EXTRA_DOCKER_RUN_PARAMS='--init' | tee -a $GITHUB_ENV
         # create packages
+        export DEBIAN_FRONTEND=noninteractive
         make -f .gitlab.mk package
         # deploy packages
         if ${{ github.event_name == 'push' &&
