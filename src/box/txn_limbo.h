@@ -31,6 +31,7 @@
  */
 #include "small/rlist.h"
 #include "vclock/vclock.h"
+#include "latch.h"
 
 #include <stdint.h>
 
@@ -148,6 +149,10 @@ struct txn_limbo {
 	 */
 	uint64_t promote_greatest_term;
 	/**
+	 * To order access to the promote data.
+	 */
+	struct latch promote_latch;
+	/**
 	 * Maximal LSN gathered quorum and either already confirmed in WAL, or
 	 * whose confirmation is in progress right now. Any attempt to confirm
 	 * something smaller than this value can be safely ignored. Moreover,
@@ -194,6 +199,32 @@ txn_limbo_is_empty(struct txn_limbo *limbo)
 	return rlist_empty(&limbo->queue);
 }
 
+/**
+ * Test if the \a owner_id is current limbo owner.
+ */
+static inline bool
+txn_limbo_is_owner(struct txn_limbo *limbo, uint32_t owner_id)
+{
+	/*
+	 * A guard needed to prevent race with in-fly promote
+	 * packets which are sitting inside journal but not yet
+	 * written.
+	 *
+	 * Note that this test supports nesting calling, where
+	 * the same fiber does the test on already taken lock
+	 * (for example the recovery journal engine does so when
+	 * it rolls back a transaction and updates replication
+	 * number causing a nested test for limbo ownership).
+	 */
+	if (latch_owner(&limbo->promote_latch) == fiber())
+		return limbo->owner_id == owner_id;
+
+	latch_lock(&limbo->promote_latch);
+	bool v = limbo->owner_id == owner_id;
+	latch_unlock(&limbo->promote_latch);
+	return v;
+}
+
 bool
 txn_limbo_is_ro(struct txn_limbo *limbo);
 
@@ -216,9 +247,12 @@ txn_limbo_last_entry(struct txn_limbo *limbo)
  * @a replica_id.
  */
 static inline uint64_t
-txn_limbo_replica_term(const struct txn_limbo *limbo, uint32_t replica_id)
+txn_limbo_replica_term(struct txn_limbo *limbo, uint32_t replica_id)
 {
-	return vclock_get(&limbo->promote_term_map, replica_id);
+	latch_lock(&limbo->promote_latch);
+	uint64_t v = vclock_get(&limbo->promote_term_map, replica_id);
+	latch_unlock(&limbo->promote_latch);
+	return v;
 }
 
 /**
@@ -226,11 +260,14 @@ txn_limbo_replica_term(const struct txn_limbo *limbo, uint32_t replica_id)
  * data from it. The check is only valid when elections are enabled.
  */
 static inline bool
-txn_limbo_is_replica_outdated(const struct txn_limbo *limbo,
+txn_limbo_is_replica_outdated(struct txn_limbo *limbo,
 			      uint32_t replica_id)
 {
-	return txn_limbo_replica_term(limbo, replica_id) <
-	       limbo->promote_greatest_term;
+	latch_lock(&limbo->promote_latch);
+	uint64_t v = vclock_get(&limbo->promote_term_map, replica_id);
+	bool res = v < limbo->promote_greatest_term;
+	latch_unlock(&limbo->promote_latch);
+	return res;
 }
 
 /**
@@ -287,7 +324,15 @@ txn_limbo_assign_lsn(struct txn_limbo *limbo, struct txn_limbo_entry *entry,
  * replica with the specified ID.
  */
 void
-txn_limbo_ack(struct txn_limbo *limbo, uint32_t replica_id, int64_t lsn);
+txn_limbo_ack(struct txn_limbo *limbo, uint32_t owner_id,
+	      uint32_t replica_id, int64_t lsn);
+
+static inline void
+txn_limbo_ack_self(struct txn_limbo *limbo, int64_t lsn)
+{
+	return txn_limbo_ack(limbo, limbo->owner_id,
+			     limbo->owner_id, lsn);
+}
 
 /**
  * Block the current fiber until the transaction in the limbo
@@ -300,7 +345,35 @@ txn_limbo_ack(struct txn_limbo *limbo, uint32_t replica_id, int64_t lsn);
 int
 txn_limbo_wait_complete(struct txn_limbo *limbo, struct txn_limbo_entry *entry);
 
-/** Execute a synchronous replication request. */
+/**
+ * Initiate execution of a synchronous replication request.
+ */
+static inline void
+txn_limbo_process_begin(struct txn_limbo *limbo)
+{
+	latch_lock(&limbo->promote_latch);
+}
+
+/** Commit a synchronous replication request. */
+static inline void
+txn_limbo_process_commit(struct txn_limbo *limbo)
+{
+	latch_unlock(&limbo->promote_latch);
+}
+
+/** Rollback a synchronous replication request. */
+static inline void
+txn_limbo_process_rollback(struct txn_limbo *limbo)
+{
+	latch_unlock(&limbo->promote_latch);
+}
+
+/** Core of processing synchronous replication request. */
+void
+txn_limbo_process_core(struct txn_limbo *limbo,
+		       const struct synchro_request *req);
+
+/** Process a synchronous replication request. */
 void
 txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req);
 

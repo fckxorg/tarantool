@@ -130,7 +130,7 @@ txn_process_func(va_list ap)
 	}
 
 	txn_limbo_assign_local_lsn(&txn_limbo, entry, fake_lsn);
-	txn_limbo_ack(&txn_limbo, txn_limbo.owner_id, fake_lsn);
+	txn_limbo_ack_self(&txn_limbo, fake_lsn);
 	txn_limbo_wait_complete(&txn_limbo, entry);
 
 	switch (process_type) {
@@ -157,7 +157,8 @@ txn_confirm_func(va_list ap)
 	 * inside gc_checkpoint().
 	 */
 	fiber_sleep(0);
-	txn_limbo_ack(&txn_limbo, relay_id, fake_lsn);
+	txn_limbo_ack(&txn_limbo, txn_limbo.owner_id,
+		      relay_id, fake_lsn);
 	return 0;
 }
 

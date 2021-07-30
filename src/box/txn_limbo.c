@@ -47,6 +47,7 @@ txn_limbo_create(struct txn_limbo *limbo)
 	vclock_create(&limbo->vclock);
 	vclock_create(&limbo->promote_term_map);
 	limbo->promote_greatest_term = 0;
+	latch_create(&limbo->promote_latch);
 	limbo->confirmed_lsn = 0;
 	limbo->rollback_count = 0;
 	limbo->is_in_rollback = false;
@@ -542,10 +543,30 @@ txn_limbo_read_demote(struct txn_limbo *limbo, int64_t lsn)
 }
 
 void
-txn_limbo_ack(struct txn_limbo *limbo, uint32_t replica_id, int64_t lsn)
+txn_limbo_ack(struct txn_limbo *limbo, uint32_t owner_id,
+	      uint32_t replica_id, int64_t lsn)
 {
+	/*
+	 * ACKs are collected only by the transactions originator
+	 * (which is the single master in 100% so far). Other instances
+	 * wait for master's CONFIRM message instead.
+	 *
+	 * Due to cooperative multitasking there might be limbo owner
+	 * migration in-fly (while writing data to journal), so for
+	 * simplicity sake the test for owner is done here instead
+	 * of putting this check to the callers.
+	 */
+	if (!txn_limbo_is_owner(limbo, owner_id))
+		return;
+
+	/*
+	 * Test for empty queue is done _after_ txn_limbo_is_owner
+	 * call because we need to be sure that limbo is not been
+	 * changed under our feet while we're reading it.
+	 */
 	if (rlist_empty(&limbo->queue))
 		return;
+
 	/*
 	 * If limbo is currently writing a rollback, it means that the whole
 	 * queue will be rolled back. Because rollback is written only for
@@ -724,11 +745,14 @@ txn_limbo_wait_empty(struct txn_limbo *limbo, double timeout)
 }
 
 void
-txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req)
+txn_limbo_process_core(struct txn_limbo *limbo,
+		       const struct synchro_request *req)
 {
+	assert(latch_is_locked(&limbo->promote_latch));
+
 	uint64_t term = req->term;
 	uint32_t origin = req->origin_id;
-	if (txn_limbo_replica_term(limbo, origin) < term) {
+	if (vclock_get(&limbo->promote_term_map, origin) < (int64_t)term) {
 		vclock_follow(&limbo->promote_term_map, origin, term);
 		if (term > limbo->promote_greatest_term)
 			limbo->promote_greatest_term = term;
@@ -787,10 +811,29 @@ txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req)
 }
 
 void
+txn_limbo_process(struct txn_limbo *limbo,
+		  const struct synchro_request *req)
+{
+	txn_limbo_process_begin(limbo);
+	txn_limbo_process_core(limbo, req);
+	txn_limbo_process_commit(limbo);
+}
+
+void
 txn_limbo_on_parameters_change(struct txn_limbo *limbo)
 {
+	/*
+	 * In case if we're not current leader (ie not owning the
+	 * limbo) then we should not confirm anything, otherwise
+	 * we could reduce quorum number and start writing CONFIRM
+	 * while leader node carries own maybe bigger quorum value.
+	 */
+	if (!txn_limbo_is_owner(limbo, instance_id))
+		return;
+
 	if (rlist_empty(&limbo->queue))
 		return;
+
 	struct txn_limbo_entry *e;
 	int64_t confirm_lsn = -1;
 	rlist_foreach_entry(e, &limbo->queue, in_queue) {
