@@ -175,10 +175,11 @@ C and Lua/C modules.
          -DCMAKE_INSTALL_LOCALSTATEDIR:PATH=%{_localstatedir} \
          -DCMAKE_INSTALL_SYSCONFDIR:PATH=%{_sysconfdir} \
 %if %{with backtrace}
-         -DENABLE_BACKTRACE:BOOL=ON \
+         -DENABLE_BACKTRACE:BOOL=OFF \
 %else
          -DENABLE_BACKTRACE:BOOL=OFF \
 %endif
+
 %if %{with systemd}
          -DWITH_SYSTEMD:BOOL=ON \
          -DSYSTEMD_UNIT_DIR:PATH=%{_unitdir} \

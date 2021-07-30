@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - os: ubuntu-20.04
+#          - os: ubuntu-20.04
           - os: odroid-arm64
 
     runs-on: ${{ matrix.config.os }}
@@ -47,7 +47,7 @@ jobs:
           GPG_SIGN_KEY: ${{ secrets.GPG_SIGN_KEY }}
           DOCKER_REPO: 'vitaliiaioffe/tarantool'
           OS: 'fedora'
-          DIST: '28'
+          DIST: '34'
         uses: ./.github/actions/pack_and_deploy
       - name: call action to send Telegram message on failure
         env:

@@ -139,8 +139,11 @@ find_library(UNWIND_LIBRARY PATH_SUFFIXES system NAMES ${UNWIND_LIB_NAME})
 
 # Disabled backtraces support on FreeBSD by default, because of
 # gh-4278.
+# Disabled backtraces support on arm64 by default, because of
+# gh-6272 and gh-6222.
 set(ENABLE_BACKTRACE_DEFAULT OFF)
-if (NOT TARGET_OS_FREEBSD AND UNWIND_LIBRARY AND HAVE_LIBUNWIND_H)
+if (NOT TARGET_OS_FREEBSD AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" AND
+    UNWIND_LIBRARY AND HAVE_LIBUNWIND_H)
     set(ENABLE_BACKTRACE_DEFAULT ON)
 endif()
 
