@@ -43,6 +43,7 @@ jobs:
           GPG_SIGN_KEY: ${{ secrets.GPG_SIGN_KEY }}
           OS: 'ubuntu'
           DIST: 'hirsute'
+          VERSION: 'my-tag-alpha'
         uses: ./.github/actions/pack_and_deploy
       - name: call action to send Telegram message on failure
         env:
