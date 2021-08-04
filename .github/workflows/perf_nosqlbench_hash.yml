@@ -2,13 +2,10 @@ name: perf_nosqlbench_hash
 
 on:
   push:
-    tags:
-      - '*'
+  pull_request:
   repository_dispatch:
     types: [backend_automation]
   workflow_dispatch:
-  schedule:
-    - cron:  '0 */3 * * *'
 
 jobs:
   perf_nosqlbench_hash:
