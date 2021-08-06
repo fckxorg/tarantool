@@ -2,13 +2,10 @@ name: perf_linkbench_ssd
 
 on:
   push:
-    tags:
-      - '*'
+  pull_request:
   repository_dispatch:
-    types: [backend_automation]
+    types: [ backend_automation ]
   workflow_dispatch:
-  schedule:
-    - cron:  '0 */3 * * *'
 
 jobs:
   perf_linkbench_ssd:
