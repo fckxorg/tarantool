@@ -133,16 +133,15 @@ deploy: export LD_LIBRARY_PATH=/usr/local/lib
 
 deploy:
 	echo ${GPG_SECRET_KEY} | base64 -d | gpg --batch --import || true
-	case "${GITHUB_REF}" in                                       \
-	refs/tags/*-alpha*|refs/tags/*-beta*|refs/tags/*-rc*|refs/tags/*-dev*)
-	    ./tools/update_repo.sh -o=${OS} -d=${DIST}            \
-			-b="${PRERELEASE_REPO_S3_DIR}/${BUCKET}" build ; \
-	        ;;
-	refs/tags/*)                                                  \
-		./tools/update_repo.sh -o=${OS} -d=${DIST}            \
-			-b="${RELEASE_REPO_S3_DIR}/${BUCKET}" build ; \
-	        ;;                                                    \
-	esac
+# 	case "${GITHUB_REF}" in                                       \
+# 	refs/tags/*-alpha*|refs/tags/*-beta*|refs/tags/*-rc*|refs/tags/*-dev*|refs/heads/VitaliyaIoffe/check-pre-release)
+    ./tools/update_repo.sh -o=${OS} -d=${DIST}            \
+        -b="${PRERELEASE_REPO_S3_DIR}/${BUCKET}" build
+# 	        ;;
+# 	refs/tags/other)                                                  \
+# 	    echo "other line" \
+# 	    ;;
+# 	esac
 
 source: deploy_prepare
 	TARBALL_COMPRESSOR=gz packpack/packpack tarball
