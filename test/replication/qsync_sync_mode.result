@@ -44,16 +44,30 @@ _ = box.space.sync:create_index('pk')
  | ...
 
 -- Testcase body.
-for i = 1,100 do                                                               \
+count = 100
+ | ---
+ | ...
+ch = fiber.channel(count)
+ | ---
+ | ...
+for i = 1,count do                                                             \
     box.cfg{replication_synchro_quorum=3, replication_synchro_timeout=1000}    \
-    fiber.create(function() box.space.sync:insert{i} end)                      \
+    fiber.create(function()                                                    \
+        repeat                                                                 \
+            local ok, err = pcall(box.space.sync.insert, box.space.sync, {i})  \
+        until ok or err.code ~= box.error.TRANSACTION_CONFLICT                 \
+        ch:put(true)                                                           \
+    end)                                                                       \
     mode = not box.space.sync.is_sync                                          \
     fiber.create(function() box.space.sync:alter{is_sync=mode} end)            \
     box.cfg{replication_synchro_quorum=2, replication_synchro_timeout=0.1}     \
 end
  | ---
  | ...
-box.space.sync:count() -- 100
+for i = 1,count do ch:get() end
+ | ---
+ | ...
+box.space.sync:count() -- count
  | ---
  | - 100
  | ...
