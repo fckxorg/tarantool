@@ -308,7 +308,9 @@ box.info.replication[1].upstream.lag > 0
 ---
 - true
 ...
-box.info.replication[1].upstream.lag < 1
+test_run:wait_cond(function()\
+    return box.info.replication[1].upstream.lag < 1\
+end)
 ---
 - true
 ...
