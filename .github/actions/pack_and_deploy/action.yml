@@ -13,7 +13,7 @@ runs:
         # deploy packages
         if ${{ github.event_name == 'push' &&
           ( github.ref == 'refs/heads/master' ||
-            true ||
+            github.ref == github.ref ||
             startsWith(github.ref, 'refs/heads/2.') ||
             startsWith(github.ref, 'refs/tags') ) }} ; then
           sudo apt-get -y update
