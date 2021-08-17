@@ -345,7 +345,7 @@ SELECT typeof(a) FROM t0;
 SELECT AVG(a) FROM t0;
  | ---
  | - null
- | - 'Type mismatch: can not convert boolean(FALSE) to number'
+ | - 'Type mismatch: can not convert boolean(FALSE) to integer, decimal or double'
  | ...
 SELECT MIN(a) FROM t0;
  | ---
@@ -366,7 +366,7 @@ SELECT MAX(a) FROM t0;
 SELECT SUM(a) FROM t0;
  | ---
  | - null
- | - 'Type mismatch: can not convert boolean(FALSE) to number'
+ | - 'Type mismatch: can not convert boolean(FALSE) to integer, decimal or double'
  | ...
 SELECT COUNT(a) FROM t0;
  | ---
@@ -379,7 +379,7 @@ SELECT COUNT(a) FROM t0;
 SELECT TOTAL(a) FROM t0;
  | ---
  | - null
- | - 'Type mismatch: can not convert boolean(FALSE) to number'
+ | - 'Type mismatch: can not convert boolean(FALSE) to integer, decimal or double'
  | ...
 SELECT GROUP_CONCAT(a, ' +++ ') FROM t0;
  | ---

@@ -237,7 +237,7 @@ test:do_catchsql_test(
     [[
         SELECT AVG(u) from t2;
     ]], {
-        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to number"
+        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to integer, decimal or double"
     })
 
 test:do_execsql_test(
@@ -445,7 +445,7 @@ test:do_catchsql_test(
     [[
         SELECT SUM(u) from t2;
     ]], {
-        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to number"
+        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to integer, decimal or double"
     })
 
 test:do_catchsql_test(
@@ -453,7 +453,7 @@ test:do_catchsql_test(
     [[
         SELECT TOTAL(u) from t2;
     ]], {
-        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to number"
+        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to integer, decimal or double"
     })
 
 test:do_execsql_test(

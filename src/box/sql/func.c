@@ -1668,59 +1668,30 @@ soundexFunc(sql_context * context, int argc, sql_value ** argv)
  */
 typedef struct SumCtx SumCtx;
 struct SumCtx {
-	double rSum;		/* Floating point sum */
-	int64_t iSum;		/* Integer sum */
-	/** True if iSum < 0. */
-	bool is_neg;
-	i64 cnt;		/* Number of elements summed */
-	u8 overflow;		/* True if integer overflow seen */
-	u8 approx;		/* True if non-integer value was input to the sum */
+	struct Mem mem;
+	uint32_t count;
 };
 
-/*
- * Routines used to compute the sum, average, and total.
- *
- * The SUM() function follows the (broken) SQL standard which means
- * that it returns NULL if it sums over no inputs.  TOTAL returns
- * 0.0 in that case.  In addition, TOTAL always returns a float where
- * SUM might return an integer if it never encounters a floating point
- * value.  TOTAL never fails, but SUM might through an exception if
- * it overflows an integer.
- */
+/** Routines used to compute the sum() and average(). */
 static void
 sum_step(struct sql_context *context, int argc, sql_value **argv)
 {
 	assert(argc == 1);
 	UNUSED_PARAMETER(argc);
 	struct SumCtx *p = sql_aggregate_context(context, sizeof(*p));
-	int type = sql_value_type(argv[0]);
-	if (type == MP_NIL || p == NULL)
+	if (p == NULL) {
+		context->is_aborted = true;
 		return;
-	if (type != MP_DOUBLE && type != MP_INT && type != MP_UINT) {
-		if (type != MP_STR || mem_to_number(argv[0]) != 0) {
-			diag_set(ClientError, ER_SQL_TYPE_MISMATCH,
-				 mem_str(argv[0]), "number");
-			context->is_aborted = true;
-			return;
-		}
-		type = sql_value_type(argv[0]);
 	}
-	p->cnt++;
-	if (type == MP_INT || type == MP_UINT) {
-		int64_t v = mem_get_int_unsafe(argv[0]);
-		if (type == MP_INT)
-			p->rSum += v;
-		else
-			p->rSum += (uint64_t) v;
-		if ((p->approx | p->overflow) == 0 &&
-		    sql_add_int(p->iSum, p->is_neg, v, type == MP_INT, &p->iSum,
-				&p->is_neg) != 0) {
-			p->overflow = 1;
-		}
-	} else {
-		p->rSum += mem_get_double_unsafe(argv[0]);
-		p->approx = 1;
+	if (p->count == 0) {
+		mem_create(&p->mem);
+		mem_set_uint(&p->mem, 0);
 	}
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	++p->count;
+	if (mem_add(&p->mem, argv[0], &p->mem) != 0)
+		context->is_aborted = true;
 }
 
 static void
@@ -1728,17 +1699,10 @@ sumFinalize(sql_context * context)
 {
 	SumCtx *p;
 	p = sql_aggregate_context(context, 0);
-	if (p && p->cnt > 0) {
-		if (p->overflow) {
-			diag_set(ClientError, ER_SQL_EXECUTE, "integer "\
-				 "overflow");
-			context->is_aborted = true;
-		} else if (p->approx) {
-			sql_result_double(context, p->rSum);
-		} else {
-			mem_set_int(context->pOut, p->iSum, p->is_neg);
-		}
-	}
+	if (p == NULL || p->count == 0)
+		mem_set_null(context->pOut);
+	else
+		mem_copy_as_ephemeral(context->pOut, &p->mem);
 }
 
 static void
@@ -1746,9 +1710,37 @@ avgFinalize(sql_context * context)
 {
 	SumCtx *p;
 	p = sql_aggregate_context(context, 0);
-	if (p && p->cnt > 0) {
-		sql_result_double(context, p->rSum / (double)p->cnt);
+	if (p == NULL || p->count == 0) {
+		mem_set_null(context->pOut);
+		return;
 	}
+	struct Mem mem;
+	mem_create(&mem);
+	mem_set_uint(&mem, p->count);
+	if (mem_div(&p->mem, &mem, context->pOut) != 0)
+		context->is_aborted = true;
+}
+
+/** Routines used to compute the total(). */
+static void
+total_step(struct sql_context *context, int argc, sql_value **argv)
+{
+	assert(argc == 1);
+	UNUSED_PARAMETER(argc);
+	struct SumCtx *p = sql_aggregate_context(context, sizeof(*p));
+	if (p == NULL) {
+		context->is_aborted = true;
+		return;
+	}
+	if (p->count == 0) {
+		mem_create(&p->mem);
+		mem_set_double(&p->mem, 0.0);
+	}
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	++p->count;
+	if (mem_add(&p->mem, argv[0], &p->mem) != 0)
+		context->is_aborted = true;
 }
 
 static void
@@ -1756,7 +1748,10 @@ totalFinalize(sql_context * context)
 {
 	SumCtx *p;
 	p = sql_aggregate_context(context, 0);
-	sql_result_double(context, p ? p->rSum : (double)0);
+	if (p == NULL || p->count == 0)
+		mem_set_double(context->pOut, 0.0);
+	else
+		mem_copy_as_ephemeral(context->pOut, &p->mem);
 }
 
 /*
@@ -2509,7 +2504,7 @@ static struct {
 	 .aggregate = FUNC_AGGREGATE_GROUP,
 	 .is_deterministic = false,
 	 .flags = 0,
-	 .call = sum_step,
+	 .call = total_step,
 	 .finalize = totalFinalize,
 	 .export_to_sql = true,
 	}, {

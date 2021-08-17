@@ -777,7 +777,7 @@ box.execute("SELECT avg(i) FROM t;")
   - name: COLUMN_1
     type: number
   rows:
-  - [6148914691236516864]
+  - [6148914691236517204]
 ...
 box.execute("SELECT total(i) FROM t;")
 ---
@@ -1251,17 +1251,17 @@ box.execute("SELECT * FROM t WHERE v = x'616263'")
 box.execute("SELECT sum(v) FROM t;")
 ---
 - null
-- 'Type mismatch: can not convert varbinary(x''616263'') to number'
+- 'Type mismatch: can not convert varbinary(x''616263'') to integer, decimal or double'
 ...
 box.execute("SELECT avg(v) FROM t;")
 ---
 - null
-- 'Type mismatch: can not convert varbinary(x''616263'') to number'
+- 'Type mismatch: can not convert varbinary(x''616263'') to integer, decimal or double'
 ...
 box.execute("SELECT total(v) FROM t;")
 ---
 - null
-- 'Type mismatch: can not convert varbinary(x''616263'') to number'
+- 'Type mismatch: can not convert varbinary(x''616263'') to integer, decimal or double'
 ...
 box.execute("SELECT min(v) FROM t;")
 ---
