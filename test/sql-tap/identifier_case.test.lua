@@ -200,7 +200,6 @@ for _, row in ipairs(data) do
         row[3])
 end
 
-
 -- Check that collaiton names work as identifiers
 data = {
     { 1,  [[ binary ]], {1, "Collation 'BINARY' does not exist"}},
@@ -208,7 +207,9 @@ data = {
     { 3,  [["binary"]], {0}},
     { 4,  [["bInaRy"]], {1, "Collation 'bInaRy' does not exist"}},
     { 5,  [["unicode"]], {0}},
-    { 6,  [[ unicode ]], {1,"Collation 'UNICODE' does not exist"}},
+    { 6,  [[ unicode ]], {1, [[At line 1 at or near position 51: keyword ]]..
+                             [['unicode' is reserved. Please use double ]]..
+                             [[quotes if 'unicode' is an identifier.]]}},
     { 7,  [["UNICODE"]], {1,"Collation 'UNICODE' does not exist"}},
     { 8,  [[NONE]], {1,"Collation 'NONE' does not exist"}},
     { 9,  [["none"]], {0}},
@@ -243,7 +244,9 @@ data = {
     { 3,  [[ 'a' < 'b' collate 'binary' ]], {1, [[Syntax error at line 1 near ''binary'']]}},
     { 4,  [[ 'a' < 'b' collate "unicode" ]], {0, {true}}},
     { 5,  [[ '5' < 'b' collate "unicode" ]], {0, {true}}},
-    { 6,  [[ '5' < 'b' collate unicode ]], {1,"Collation 'UNICODE' does not exist"}},
+    { 6,  [[ '5' < 'b' collate unicode ]], {1,
+        [[At line 1 at or near position 43: keyword 'unicode' is reserved. ]]..
+        [[Please use double quotes if 'unicode' is an identifier.]]}},
     { 7,  [[ '5' < 'b' collate "unicode_ci" ]], {0, {true}}},
     { 8,  [[ '5' < 'b' collate NONE ]], {1, "Collation 'NONE' does not exist"}},
     { 9,  [[ '5' < 'b' collate "none" ]], {0, {true}}},

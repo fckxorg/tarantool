@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 local test = require("sqltester")
-test:plan(184)
+test:plan(219)
 
 --!./tcltestrunner.lua
 -- 2009 January 29
@@ -138,7 +138,6 @@ local bannedkws = {
 	"asensitive",
 	"binary",
 	"call",
-	"char",
 	"character",
 	"condition",
 	"connect",
@@ -192,7 +191,43 @@ local bannedkws = {
 	"varchar",
 	"varbinary",
 	"whenever",
-	"while"
+	"while",
+	"abs",
+	"avg",
+	"char",
+	"char_length",
+	"character_length",
+	"coalesce",
+	"count",
+	"greatest",
+	"group_concat",
+	"hex",
+	"ifnull",
+	"least",
+	"length",
+	"likelihood",
+	"likely",
+	"lower",
+	"max",
+	"min",
+	"nullif",
+	"position",
+	"printf",
+	"quote",
+	"random",
+	"randomblob",
+	"round",
+	"row_count",
+	"soundex",
+	"substr",
+	"sum",
+	"total",
+	"typeof",
+	"unicode",
+	"unlikely",
+	"upper",
+	"version",
+	"zeroblob"
 }
 local exprkw = [[
     "cast",

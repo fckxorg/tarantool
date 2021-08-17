@@ -40,7 +40,7 @@ test:do_catchsql_test(
 test:do_catchsql_test(
 	"sql-errors-1.3",
 	[[
-		CREATE TABLE t3 (i INT PRIMARY KEY, a INT DEFAULT(MAX(i, 1)));
+		CREATE TABLE t3 (i INT PRIMARY KEY, a INT DEFAULT(GREATEST(i, 1)));
 	]], {
 		-- <sql-errors-1.3>
 		1,"Failed to create space 'T3': default value of column 'A' is not constant"
@@ -183,7 +183,8 @@ test:do_catchsql_test(
 	select_statement,
 	{
 		-- <sql-errors-1.16>
-		1,"Number of arguments to function CHAR 128 exceeds the limit (127)"
+		1, [[Wrong number of arguments is passed to CHAR(): ]]..
+		   [[expected from 0 to 127, got 128]]
 		-- </sql-errors-1.16>
 	})
 
@@ -198,7 +199,8 @@ test:do_catchsql_test(
 	select_statement,
 	{
 		-- <sql-errors-1.17>
-		1,"Number of arguments to function MAX 128 exceeds the limit (127)"
+		1, [[Wrong number of arguments is passed to MAX(): ]]..
+		   [[expected 1, got 128]]
 		-- </sql-errors-1.17>
 	})
 

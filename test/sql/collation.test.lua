@@ -21,9 +21,9 @@ box.execute([[INSERT INTO tu VALUES ('Latin Small Letter I U+0069','i');]])
 box.execute([[INSERT INTO tu VALUES ('Latin Capital Letter I With Dot Above U+0130','İ');]])
 box.execute([[INSERT INTO tu VALUES ('Latin Small Letter Dotless I U+0131','ı');]])
 -- Without collation
-box.execute([[SELECT descriptor, upper(letter) AS upper,lower(letter) AS lower FROM tu;]])
+box.execute([[SELECT descriptor, upper(letter) AS "UPPER",lower(letter) AS "LOWER" FROM tu;]])
 -- With collation
-box.execute([[SELECT descriptor, upper(letter COLLATE "TURKISH") AS upper,lower(letter COLLATE "TURKISH") AS lower FROM tu;]])
+box.execute([[SELECT descriptor, upper(letter COLLATE "TURKISH") AS "UPPER", lower(letter COLLATE "TURKISH") AS "LOWER" FROM tu;]])
 box.internal.collation.drop('TURKISH')
 
 -- For de-DE result is actually the same

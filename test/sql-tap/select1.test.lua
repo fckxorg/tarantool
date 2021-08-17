@@ -250,7 +250,7 @@ test:do_catchsql_test(
         SELECT count(f1,f2) FROM test1
     ]], {
         -- <select1-2.1>
-        1, "Wrong number of arguments is passed to COUNT(): expected 0 or 1, got 2"
+        1, "Wrong number of arguments is passed to COUNT(): expected from 0 to 1, got 2"
         -- </select1-2.1>
     })
 
@@ -330,7 +330,7 @@ test:do_catchsql_test(
         SELECT min(*) FROM test1
     ]], {
         -- <select1-2.6>
-        1, "Wrong number of arguments is passed to MIN(): expected 1, got 0"
+        1, "Syntax error at line 1 near '*'"
         -- </select1-2.6>
     })
 
@@ -395,7 +395,7 @@ test:do_catchsql_test(
         SELECT MAX(*) FROM test1
     ]], {
         -- <select1-2.9>
-        1, "Wrong number of arguments is passed to MAX(): expected 1, got 0"
+        1, "Syntax error at line 1 near '*'"
         -- </select1-2.9>
     })
 
@@ -475,7 +475,7 @@ test:do_catchsql_test(
         SELECT SUM(*) FROM test1
     ]], {
         -- <select1-2.14>
-        1, "Wrong number of arguments is passed to SUM(): expected 1, got 0"
+        1, "Syntax error at line 1 near '*'"
         -- </select1-2.14>
     })
 
@@ -697,7 +697,7 @@ test:do_catchsql_test(
         SELECT f1 FROM test1 WHERE count(f1,f2)!=11
     ]], {
         -- <select1-3.9>
-        1, "misuse of aggregate function COUNT()"
+        1, "Wrong number of arguments is passed to COUNT(): expected from 0 to 1, got 2"
         -- </select1-3.9>
     })
 
@@ -1982,8 +1982,8 @@ test:do_test(
         -- This used to seg-fault when the problem existed.
         return test:execsql [[
             SELECT count(
-              (SELECT a FROM abc WHERE a = NULL AND b >= upper.c)
-            ) FROM abc AS upper;
+              (SELECT a FROM abc WHERE a = NULL AND b >= "UPPER".c)
+            ) FROM abc AS "UPPER";
         ]]
     end, {
         -- <select1-13.1>

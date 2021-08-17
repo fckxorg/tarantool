@@ -176,10 +176,10 @@ test:do_execsql_test(
               --     one      10
               --     three    5
               --
-              SELECT DISTINCT artist,sum(timesplayed) AS total
+              SELECT DISTINCT artist,sum(timesplayed) AS "TOTAL"
               FROM songs
               GROUP BY LOWER(artist)
-              ORDER BY total DESC
+              ORDER BY "TOTAL" DESC
               LIMIT 10
             )
             WHERE artist <> ''

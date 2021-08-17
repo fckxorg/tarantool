@@ -1172,27 +1172,506 @@ trim_specification(A) ::= LEADING.  { A = TRIM_LEADING; }
 trim_specification(A) ::= TRAILING. { A = TRIM_TRAILING; }
 trim_specification(A) ::= BOTH.     { A = TRIM_BOTH; }
 
-expr(A) ::= id(X) LP distinct(D) exprlist(Y) RP(E). {
-  if( Y && Y->nExpr>pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG] ){
-    const char *err =
-      tt_sprintf("Number of arguments to function %.*s", X.n, X.z);
-    diag_set(ClientError, ER_SQL_PARSER_LIMIT, err, Y->nExpr,
-             pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]);
+expr(A) ::= ABS(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "ABS", "1", n);
     pParse->is_aborted = true;
+    return;
   }
   A.pExpr = sqlExprFunction(pParse, Y, &X);
-  spanSet(&A,&X,&E);
-  if( D==SF_Distinct && A.pExpr ){
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
-  }
 }
 
-/*
- * type_func(A) ::= DATE(A) .
- * type_func(A) ::= DATETIME(A) .
- */
-type_func(A) ::= CHAR(A) .
-expr(A) ::= type_func(X) LP distinct(D) exprlist(Y) RP(E). {
+expr(A) ::= AVG(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "AVG", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= CHAR(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL && Y->nExpr > pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]) {
+    const char *str = tt_sprintf("from %d to %d", 0,
+                                 pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "CHAR", str, Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= CHAR_LEN(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *name = X.n == strlen("CHAR_LENGTH") ? "CHAR_LENGTH" :
+                       "CHARACTER_LENGTH";
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, name, "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= COALESCE(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr < 2 ||
+      Y->nExpr > pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *str = tt_sprintf("from %d to %d", 2,
+                                 pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "COALESCE", str, n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= COUNT(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL && Y->nExpr > 1) {
+    const char *str = tt_sprintf("from %d to %d", 0, 1);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "COUNT", str, Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= COUNT(X) LP STAR RP(E). {
+  A.pExpr = sqlExprFunction(pParse, NULL, &X);
+  spanSet(&A, &X, &E);
+}
+
+expr(A) ::= GREATEST(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr < 2 ||
+      Y->nExpr > pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *str = tt_sprintf("from %d to %d", 2,
+                                 pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "GREATEST", str, n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= GROUP_CONCAT(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr > 2) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *str = tt_sprintf("from %d to %d", 1, 2);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "GROUP_CONCAT", str, n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= HEX(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "HEX", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= IFNULL(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 2) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "IFNULL", "2", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= LEAST(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr < 2 ||
+      Y->nExpr > pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *str = tt_sprintf("from %d to %d", 2,
+                                 pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "LEAST", str, n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= LENGTH(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "LENGTH", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= LIKELIHOOD(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 2) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "LIKELIHOOD", "2", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= LIKELY(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "LIKELY", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= LOWER(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "LOWER", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= MAX(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "MAX", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= MIN(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "MIN", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= NULLIF(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 2) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "NULLIF", "2", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= POSITION(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 2) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "POSITION", "2", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= PRINTF(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL && Y->nExpr > pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]) {
+    const char *str = tt_sprintf("from %d to %d", 0,
+                                 pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG]);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "PRINTF", str, Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= QUOTE(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "QUOTE", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= RANDOM(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL) {
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "RANDOM", "0", Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= RANDOMBLOB(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "RANDOMBLOB", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= REPLACE(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 3) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "REPLACE", "3", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= ROUND(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr > 2) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *str = tt_sprintf("from %d to %d", 1, 2);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "ROUND", str, n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= ROW_COUNT(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL) {
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "ROW_COUNT", "0", Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= SOUNDEX(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "SOUNDEX", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= SUBSTR(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr < 2 || Y->nExpr > 3) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    const char *str = tt_sprintf("from %d to %d", 2, 3);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "SUBSTR", str, n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= SUM(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "SUM", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= TOTAL(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "TOTAL", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= TYPEOF(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "TYPEOF", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= UNICODE(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "UNICODE", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= UNLIKELY(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "UNLIKELY", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= UPPER(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "UPPER", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= UUID(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL && Y->nExpr > 1) {
+    const char *str = tt_sprintf("from %d to %d", 0, 1);
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "UUID", str, Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= VERSION(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y != NULL) {
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "VERSION", "0", Y->nExpr);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= ZEROBLOB(X) LP distinct(D) exprlist(Y) RP(E). {
+  if (Y == NULL || Y->nExpr != 1) {
+    int n = Y == NULL ? 0 : Y->nExpr;
+    diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "ZEROBLOB", "1", n);
+    pParse->is_aborted = true;
+    return;
+  }
+  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  spanSet(&A, &X, &E);
+  if(D == SF_Distinct && A.pExpr)
+    A.pExpr->flags |= EP_Distinct;
+}
+
+expr(A) ::= id(X) LP distinct(D) exprlist(Y) RP(E). {
   if( Y && Y->nExpr>pParse->db->aLimit[SQL_LIMIT_FUNCTION_ARG] ){
     const char *err =
       tt_sprintf("Number of arguments to function %.*s", X.n, X.z);

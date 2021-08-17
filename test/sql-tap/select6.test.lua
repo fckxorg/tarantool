@@ -152,9 +152,9 @@ test:do_execsql_test(
 test:do_execsql_test(
     "select6-1.9",
     [=[
-        SELECT q, p, r, min
+        SELECT q, p, r, m
         FROM (SELECT count(*) as p , y as q FROM t1 GROUP BY y) AS a,
-             (SELECT max(x) as r, y as s, min(x)+y AS min FROM t1 GROUP BY y) as b
+             (SELECT max(x) as r, y as s, min(x)+y AS m FROM t1 GROUP BY y) as b
         WHERE q=s ORDER BY s
     ]=], {
         -- <select6-1.9>
@@ -245,9 +245,9 @@ test:do_execsql_test(
 test:do_execsql_test(
     "select6-2.7",
     [=[
-        SELECT a.b, a.count, max, count
-        FROM (SELECT count(*) AS count, b FROM t2 GROUP BY b) AS a,
-             (SELECT max(a) AS max, b FROM t2 GROUP BY b) as b
+        SELECT a.b, a.c, m, c
+        FROM (SELECT count(*) AS c, b FROM t2 GROUP BY b) AS a,
+             (SELECT max(a) AS m, b FROM t2 GROUP BY b) as b
         WHERE a.b=b.b ORDER BY a.b
     ]=], {
         -- <select6-2.7>
@@ -429,8 +429,8 @@ test:do_execsql_test(
 test:do_execsql_test(
     "select6-3.14",
     [=[
-        SELECT count, y FROM (SELECT count(*) AS count, y FROM t1 GROUP BY y)
-        ORDER BY count
+        SELECT c, y FROM (SELECT count(*) AS c, y FROM t1 GROUP BY y)
+        ORDER BY c
     ]=], {
         -- <select6-3.14>
         1, 1, 2, 2, 4, 3, 5, 5, 8, 4
@@ -440,7 +440,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "select6-3.15",
     [=[
-        SELECT count, y FROM (SELECT count(*) AS count, y FROM t1 GROUP BY y)
+        SELECT c, y FROM (SELECT count(*) AS c, y FROM t1 GROUP BY y)
         ORDER BY y
     ]=], {
         -- <select6-3.15>

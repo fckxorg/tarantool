@@ -661,8 +661,8 @@ tx1:rollback()
 
 -- gh-6095: SQL query may crash in MVCC mode if it involves ephemeral spaces.
 --
-box.execute([[ CREATE TABLE test (id INT NOT NULL PRIMARY KEY, count INT NOT NULL)]])
-box.execute([[ UPDATE test SET count = count + 1 WHERE id = 0 ]])
+box.execute([[ CREATE TABLE test (id INT NOT NULL PRIMARY KEY, "COUNT" INT NOT NULL)]])
+box.execute([[ UPDATE test SET "COUNT" = "COUNT" + 1 WHERE id = 0 ]])
 box.execute([[ DROP TABLE test]])
 
 -- https://github.com/tarantool/tarantool/issues/5515

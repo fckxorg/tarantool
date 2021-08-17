@@ -62,7 +62,7 @@ test:do_catchsql_test(
 	CREATE TABLE t3(
 	rowid INTEGER PRIMARY KEY AUTOINCREMENT,
 	x INTEGER,
-	y INTEGER DEFAULT (max(x,5))
+	y INTEGER DEFAULT (greatest(x,5))
 	);
 	]], {
 	-- <default-1.3>

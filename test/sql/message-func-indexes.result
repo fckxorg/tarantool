@@ -12,7 +12,7 @@ box.execute("CREATE TABLE t1(id INTEGER PRIMARY KEY, a INTEGER)")
 ---
 - row_count: 1
 ...
-box.execute("CREATE TABLE t2(object INTEGER PRIMARY KEY, price INTEGER, count INTEGER)")
+box.execute([[CREATE TABLE t2(object INTEGER PRIMARY KEY, price INTEGER, "COUNT" INTEGER)]])
 ---
 - row_count: 1
 ...
@@ -36,12 +36,12 @@ box.execute("CREATE INDEX i4 ON t2(price)")
 ---
 - row_count: 1
 ...
-box.execute("CREATE INDEX i5 ON t2(count + 1)")
+box.execute([[CREATE INDEX i5 ON t2("COUNT" + 1)]])
 ---
 - null
 - Tarantool does not support functional indexes
 ...
-box.execute("CREATE INDEX i6 ON t2(count * price)")
+box.execute([[CREATE INDEX i6 ON t2("COUNT" * price)]])
 ---
 - null
 - Tarantool does not support functional indexes
