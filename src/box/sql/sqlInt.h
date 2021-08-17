@@ -1188,6 +1188,8 @@ struct type_def {
  */
 /** Function is one of aggregate functions. */
 #define SQL_FUNC_AGG      0x0001
+/** Function is deterministic. */
+#define SQL_FUNC_DETERM   0x0002
 #define SQL_FUNC_LIKE     0x0004	/* Candidate for the LIKE optimization */
 #define SQL_FUNC_NEEDCOLL 0x0020	/* sqlGetFuncCollSeq() might be called.
 					 * The flag is set when the collation
@@ -1399,8 +1401,7 @@ struct AggInfo {
 				 */
 	struct AggInfo_func {	/* For each aggregate function */
 		Expr *pExpr;	/* Expression encoding the function */
-		/** The aggregate function implementation. */
-		struct func *func;
+		uint32_t flags;
 		int iMem;	/* Memory location that acts as accumulator */
 		int iDistinct;	/* Ephemeral table used to enforce DISTINCT */
 		/**
@@ -1494,6 +1495,9 @@ struct Expr {
 	 * space is allocated for the fields below this point. An attempt to
 	 * access them will result in a segfault or malfunction.
 	 ********************************************************************/
+
+	/** SQL Built-in function id. */
+	uint8_t func_id;
 
 	Expr *pLeft;		/* Left subnode */
 	Expr *pRight;		/* Right subnode */
@@ -2706,7 +2710,7 @@ ExprList *sqlExprListAppendVector(Parse *, ExprList *, IdList *, Expr *);
 /** Construct a new expression node for a built-in function. */
 struct Expr *
 sql_expr_new_built_in(struct Parse *parser, struct ExprList *list,
-		      struct Token *token);
+		      struct Token *token, uint8_t id);
 
 /**
  * Set the sort order for the last element on the given ExprList.
@@ -4401,13 +4405,11 @@ sql_func_find(struct Expr *expr);
 struct func *
 sql_func_by_signature(const char *name, uint32_t argc);
 
-/**
- * Return the parameters of the function with the given name. If the function
- * with the given name does not exist, or the function is not a built-in SQL
- * function, 0 is returned, which means no parameters have been set.
- */
 uint32_t
-sql_func_flags(const char *name);
+sql_func_flags(uint8_t id);
+
+enum field_type
+sql_func_result(struct Expr *expr);
 
 /**
  * Generate VDBE code to halt execution with correct error if

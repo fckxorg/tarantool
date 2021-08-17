@@ -351,7 +351,7 @@ sql_expr_coll(Parse *parse, Expr *p, bool *is_explicit_coll, uint32_t *coll_id,
 		if (op == TK_BUILT_IN_FUNC) {
 			uint32_t arg_count = p->x.pList == NULL ? 0 :
 					     p->x.pList->nExpr;
-			uint32_t flags = sql_func_flags(p->u.zToken);
+			uint32_t flags = sql_func_flags(p->func_id);
 			if (((flags & SQL_FUNC_DERIVEDCOLL) != 0) &&
 			    arg_count > 0) {
 				/*
@@ -1221,7 +1221,7 @@ sqlExprFunction(Parse * pParse, ExprList * pList, Token * pToken)
 
 struct Expr *
 sql_expr_new_built_in(struct Parse *parser, struct ExprList *list,
-		      struct Token *token)
+		      struct Token *token, uint8_t id)
 {
 	struct sql *db = parser->db;
 	assert(token != NULL);
@@ -1233,6 +1233,7 @@ sql_expr_new_built_in(struct Parse *parser, struct ExprList *list,
 		return NULL;
 	}
 	new_expr->x.pList = list;
+	new_expr->func_id = id;
 	assert(!ExprHasProperty(new_expr, EP_xIsSelect));
 	sqlExprSetHeightAndFlags(parser, new_expr);
 	return new_expr;
@@ -1515,6 +1516,8 @@ sql_expr_dup(struct sql *db, struct Expr *p, int flags, char **buffer)
 			nToken = sqlStrlen30(p->u.zToken) + 1;
 		else
 			nToken = 0;
+		if (p->op == TK_BUILT_IN_FUNC)
+			pNew->func_id = p->func_id;
 		if (flags) {
 			assert(ExprHasProperty(p, EP_Reduced) == 0);
 			memcpy(zAlloc, p, nNewSize);
@@ -1551,7 +1554,6 @@ sql_expr_dup(struct sql *db, struct Expr *p, int flags, char **buffer)
 					sql_expr_list_dup(db, p->x.pList, flags);
 			}
 		}
-
 		/* Fill in pNew->pLeft and pNew->pRight. */
 		if (ExprHasProperty(pNew, EP_Reduced | EP_TokenOnly)) {
 			zAlloc += dupedExprNodeSize(p, flags);
@@ -4025,21 +4027,17 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			}
 			nFarg = pFarg ? pFarg->nExpr : 0;
 			assert(!ExprHasProperty(pExpr, EP_IntValue));
-			struct func *func = sql_func_find(pExpr);
-			if (func == NULL) {
-				pParse->is_aborted = true;
-				break;
-			}
+			uint32_t flags = sql_func_flags(pExpr->func_id);
 			/* Attempt a direct implementation of the built-in COALESCE() and
 			 * IFNULL() functions.  This avoids unnecessary evaluation of
 			 * arguments past the first non-NULL argument.
 			 */
-			if (sql_func_flag_is_set(func, SQL_FUNC_COALESCE)) {
+			if ((flags & SQL_FUNC_COALESCE) != 0) {
 				int endCoalesce = sqlVdbeMakeLabel(v);
 				if (nFarg < 2) {
 					diag_set(ClientError,
 						 ER_FUNC_WRONG_ARG_COUNT,
-						 func->def->name,
+						 pExpr->u.zToken,
 						 "at least two", nFarg);
 					pParse->is_aborted = true;
 					break;
@@ -4065,11 +4063,11 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			/* The UNLIKELY() function is a no-op.  The result is the value
 			 * of the first argument.
 			 */
-			if (sql_func_flag_is_set(func, SQL_FUNC_UNLIKELY)) {
+			if ((flags & SQL_FUNC_UNLIKELY) != 0) {
 				if (nFarg < 1) {
 					diag_set(ClientError,
 						 ER_FUNC_WRONG_ARG_COUNT,
-						 func->def->name,
+						 pExpr->u.zToken,
 						 "at least one", nFarg);
 					pParse->is_aborted = true;
 					break;
@@ -4095,8 +4093,7 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			 * is done using ANSI rules from
 			 * collations_check_compatibility().
 			 */
-			if (sql_func_flag_is_set(func, SQL_FUNC_NEEDCOLL) &&
-			    nFarg > 0) {
+			if ((flags & SQL_FUNC_NEEDCOLL) != 0 && nFarg > 0) {
 				struct coll *unused = NULL;
 				uint32_t curr_id = COLL_NONE;
 				bool is_curr_forced = false;
@@ -4143,8 +4140,8 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				 * or OPFLAG_TYPEOFARG respectively, to avoid unnecessary data
 				 * loading.
 				 */
-				if (sql_func_flag_is_set(func, SQL_FUNC_LENGTH |
-							       SQL_FUNC_TYPEOF)) {
+				if ((flags & (SQL_FUNC_LENGTH |
+					      SQL_FUNC_TYPEOF)) != 0) {
 					u8 exprOp;
 					assert(nFarg == 1);
 					assert(pFarg->a[0].pExpr != 0);
@@ -4167,9 +4164,14 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			} else {
 				r1 = 0;
 			}
-			if (sql_func_flag_is_set(func, SQL_FUNC_NEEDCOLL)) {
+			if ((flags & SQL_FUNC_NEEDCOLL) != 0) {
 				sqlVdbeAddOp4(v, OP_CollSeq, 0, 0, 0,
 						  (char *)coll, P4_COLLSEQ);
+			}
+			struct func *func = sql_func_find(pExpr);
+			if (func == NULL) {
+				pParse->is_aborted = true;
+				break;
 			}
 			sqlVdbeAddOp4(v, OP_BuiltinFunction0, constMask, r1,
 				      target, (char *)func, P4_FUNC);
@@ -5473,15 +5475,10 @@ analyzeAggregate(Walker * pWalker, Expr * pExpr)
 						pItem->iMem = ++pParse->nMem;
 						assert(!ExprHasProperty
 						       (pExpr, EP_IntValue));
-						pItem->func =
-							sql_func_find(pExpr);
-						assert(pItem->func != NULL);
-						assert(pItem->func->def->
-						       language ==
-						       FUNC_LANGUAGE_SQL_BUILTIN &&
-						       pItem->func->def->
-						       aggregate ==
-						       FUNC_AGGREGATE_GROUP);
+						pItem->flags =
+							sql_func_flags(pExpr->func_id);
+						assert((pItem->flags &
+							SQL_FUNC_AGG) != 0);
 						if (pExpr->flags & EP_Distinct) {
 							pItem->iDistinct =
 								pParse->nTab++;

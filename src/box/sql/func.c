@@ -1911,8 +1911,7 @@ sql_is_like_func(struct Expr *expr)
 	    expr->x.pList->nExpr != 2)
 		return 0;
 	assert(!ExprHasProperty(expr, EP_xIsSelect));
-	struct func *func = sql_func_find(expr);
-	if (func == NULL || !sql_func_flag_is_set(func, SQL_FUNC_LIKE))
+	if ((sql_func_flags(expr->func_id) & SQL_FUNC_LIKE) == 0)
 		return 0;
 	return 1;
 }
@@ -2681,19 +2680,6 @@ sql_func_find(struct Expr *expr)
 	return func;
 }
 
-uint32_t
-sql_func_flags(const char *name)
-{
-	struct func *func = built_in_func_get(name);
-	if (func == NULL)
-		return 0;
-	assert(func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
-	uint32_t flags = ((struct func_sql_builtin *)func)->flags;
-	if (func->def->aggregate == FUNC_AGGREGATE_GROUP)
-		flags |= SQL_FUNC_AGG;
-	return flags;
-}
-
 static struct func_vtab func_sql_builtin_vtab;
 
 void
@@ -2774,3 +2760,124 @@ static struct func_vtab func_sql_builtin_vtab = {
 	.call = func_sql_builtin_call_stub,
 	.destroy = func_sql_builtin_destroy,
 };
+
+uint32_t
+sql_func_flags(uint8_t id)
+{
+	switch(id) {
+	case TK_ABS:
+	case TK_CHAR:
+	case TK_CHAR_LEN:
+	case TK_HEX:
+	case TK_PRINTF:
+	case TK_QUOTE:
+	case TK_ROUND:
+	case TK_ROW_COUNT:
+	case TK_SOUNDEX:
+	case TK_UNICODE:
+	case TK_VERSION:
+	case TK_ZEROBLOB:
+		return SQL_FUNC_DETERM;
+	case TK_AVG:
+	case TK_COUNT:
+	case TK_GROUP_CONCAT:
+	case TK_SUM:
+	case TK_TOTAL:
+		return SQL_FUNC_AGG;
+	case TK_COALESCE:
+	case TK_IFNULL:
+		return SQL_FUNC_COALESCE | SQL_FUNC_DETERM;
+	case TK_GREATEST:
+		return SQL_FUNC_MAX | SQL_FUNC_NEEDCOLL | SQL_FUNC_DETERM;
+	case TK_LEAST:
+		return SQL_FUNC_MIN | SQL_FUNC_NEEDCOLL | SQL_FUNC_DETERM;
+	case TK_LENGTH:
+		return SQL_FUNC_LENGTH | SQL_FUNC_DETERM;
+	case TK_LIKE_KW:
+		return SQL_FUNC_LIKE | SQL_FUNC_NEEDCOLL | SQL_FUNC_DETERM;
+	case TK_LIKELIHOOD:
+	case TK_LIKELY:
+	case TK_UNLIKELY:
+		return SQL_FUNC_UNLIKELY | SQL_FUNC_DETERM;
+	case TK_LOWER:
+	case TK_UPPER:
+		return SQL_FUNC_DERIVEDCOLL | SQL_FUNC_NEEDCOLL |
+		       SQL_FUNC_DETERM;
+	case TK_MAX:
+		return SQL_FUNC_MAX | SQL_FUNC_AGG | SQL_FUNC_NEEDCOLL;
+	case TK_MIN:
+		return SQL_FUNC_MIN | SQL_FUNC_AGG | SQL_FUNC_NEEDCOLL;
+	case TK_NULLIF:
+	case TK_POSITION:
+		return SQL_FUNC_NEEDCOLL | SQL_FUNC_DETERM;
+	case TK_RANDOM:
+	case TK_RANDOMBLOB:
+	case TK_UUID:
+		return 0;
+	case TK_REPLACE:
+	case TK_SUBSTR:
+	case TK_TRIM:
+		return SQL_FUNC_DERIVEDCOLL | SQL_FUNC_DETERM;
+	case TK_TYPEOF:
+		return SQL_FUNC_TYPEOF | SQL_FUNC_DETERM;
+	default:
+		unreachable();
+	}
+	return 0;
+}
+
+enum field_type
+sql_func_result(struct Expr *expr)
+{
+	switch(expr->func_id) {
+	case TK_ABS:
+	case TK_AVG:
+	case TK_SUM:
+	case TK_TOTAL:
+		return FIELD_TYPE_NUMBER;
+	case TK_CHAR:
+	case TK_GROUP_CONCAT:
+	case TK_HEX:
+	case TK_LOWER:
+	case TK_PRINTF:
+	case TK_QUOTE:
+	case TK_REPLACE:
+	case TK_SOUNDEX:
+	case TK_SUBSTR:
+	case TK_TRIM:
+	case TK_TYPEOF:
+	case TK_UNICODE:
+	case TK_UPPER:
+	case TK_VERSION:
+		return FIELD_TYPE_STRING;
+	case TK_CHAR_LEN:
+	case TK_COUNT:
+	case TK_LENGTH:
+	case TK_LIKE_KW:
+	case TK_POSITION:
+	case TK_RANDOM:
+	case TK_ROUND:
+	case TK_ROW_COUNT:
+		return FIELD_TYPE_INTEGER;
+	case TK_COALESCE:
+	case TK_GREATEST:
+	case TK_IFNULL:
+	case TK_LEAST:
+	case TK_MAX:
+	case TK_MIN:
+	case TK_NULLIF:
+		return FIELD_TYPE_SCALAR;
+	case TK_LIKELIHOOD:
+	case TK_LIKELY:
+	case TK_UNLIKELY:
+		return FIELD_TYPE_BOOLEAN;
+	case TK_RANDOMBLOB:
+	case TK_ZEROBLOB:
+		return FIELD_TYPE_VARBINARY;
+	case TK_UUID:
+		return FIELD_TYPE_UUID;
+	default:
+		unreachable();
+	}
+	return field_type_MAX;
+}
