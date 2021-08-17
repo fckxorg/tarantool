@@ -137,6 +137,29 @@ sql_expr_type(struct Expr *pExpr)
 	return pExpr->type;
 }
 
+struct func *
+sql_func_by_signature(const char *name, uint32_t argc)
+{
+	struct func *func = func_by_name(name, strlen(name));
+	if (func == NULL) {
+		diag_set(ClientError, ER_NO_SUCH_FUNCTION, name);
+		return NULL;
+	}
+	if (!func->def->exports.sql) {
+		diag_set(ClientError, ER_SQL_PARSER_GENERIC,
+			 tt_sprintf("function %s() is not available in "
+				    "SQL", name));
+		return NULL;
+	}
+	if (func->def->param_count != (int)argc) {
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, name,
+			 tt_sprintf("%d", func->def->param_count),
+			 argc);
+		return NULL;
+	}
+	return func;
+}
+
 enum field_type *
 field_type_sequence_dup(struct Parse *parse, enum field_type *types,
 			uint32_t len)
@@ -202,7 +225,7 @@ sqlExprSkipCollate(Expr * pExpr)
 		if (ExprHasProperty(pExpr, EP_Unlikely)) {
 			assert(!ExprHasProperty(pExpr, EP_xIsSelect));
 			assert(pExpr->x.pList->nExpr > 0);
-			assert(pExpr->op == TK_FUNCTION);
+			assert(pExpr->op == TK_BUILT_IN_FUNC);
 			pExpr = pExpr->x.pList->a[0].pExpr;
 		} else {
 			assert(pExpr->op == TK_COLLATE);
@@ -325,7 +348,7 @@ sql_expr_coll(Parse *parse, Expr *p, bool *is_explicit_coll, uint32_t *coll_id,
 			*coll_id = lhs_coll_id;
 			break;
 		}
-		if (op == TK_FUNCTION) {
+		if (op == TK_BUILT_IN_FUNC) {
 			uint32_t arg_count = p->x.pList == NULL ? 0 :
 					     p->x.pList->nExpr;
 			uint32_t flags = sql_func_flags(p->u.zToken);
@@ -1031,7 +1054,8 @@ sql_expr_new_dequoted(struct sql *db, int op, const struct Token *token)
 	e->u.zToken = (char *) &e[1];
 	if (token->z[0] == '"')
 		e->flags |= EP_DblQuoted;
-	if (op != TK_ID && op != TK_COLLATE && op != TK_FUNCTION) {
+	if (op != TK_ID && op != TK_COLLATE && op != TK_FUNCTION &&
+	    op != TK_BUILT_IN_FUNC) {
 		memcpy(e->u.zToken, token->z, token->n);
 		e->u.zToken[token->n] = '\0';
 		sqlDequote(e->u.zToken);
@@ -1192,6 +1216,25 @@ sqlExprFunction(Parse * pParse, ExprList * pList, Token * pToken)
 	new_expr->x.pList = pList;
 	assert(!ExprHasProperty(new_expr, EP_xIsSelect));
 	sqlExprSetHeightAndFlags(pParse, new_expr);
+	return new_expr;
+}
+
+struct Expr *
+sql_expr_new_built_in(struct Parse *parser, struct ExprList *list,
+		      struct Token *token)
+{
+	struct sql *db = parser->db;
+	assert(token != NULL);
+	struct Expr *new_expr = sql_expr_new_dequoted(db, TK_BUILT_IN_FUNC,
+						      token);
+	if (new_expr == NULL) {
+		sql_expr_list_delete(db, list);
+		parser->is_aborted = true;
+		return NULL;
+	}
+	new_expr->x.pList = list;
+	assert(!ExprHasProperty(new_expr, EP_xIsSelect));
+	sqlExprSetHeightAndFlags(parser, new_expr);
 	return new_expr;
 }
 
@@ -2052,6 +2095,7 @@ exprNodeIsConstant(Walker * pWalker, Expr * pExpr)
 		 * and either pWalker->eCode==4 or 5 or the function has the
 		 * SQL_FUNC_CONST flag.
 		 */
+	case TK_BUILT_IN_FUNC:
 	case TK_FUNCTION:
 		if (pWalker->eCode >= 4 || ExprHasProperty(pExpr, EP_ConstFunc)) {
 			return WRC_Continue;
@@ -3920,6 +3964,53 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			break;
 		}
 	case TK_FUNCTION:{
+		struct ExprList *args;
+		uint32_t argc;
+		/* Mask of function arguments that are constant */
+		uint32_t mask = 0;
+
+		assert(!ExprHasProperty(pExpr, EP_xIsSelect));
+		if (ExprHasProperty(pExpr, EP_TokenOnly)) {
+			args = NULL;
+		} else {
+			args = pExpr->x.pList;
+		}
+		argc = args != NULL ? args->nExpr : 0;
+		assert(!ExprHasProperty(pExpr, EP_IntValue));
+		const char *name = pExpr->u.zToken;
+		struct func *func = sql_func_by_signature(name, argc);
+		if (func == NULL) {
+			pParse->is_aborted = true;
+			break;
+		}
+		for (uint32_t i = 0; i < argc; i++) {
+			if (i < 32 && sqlExprIsConstant(args->a[i].pExpr))
+				mask |= MASKBIT32(i);
+		}
+		if (args != NULL) {
+			if (mask != 0) {
+				r1 = pParse->nMem + 1;
+				pParse->nMem += argc;
+			} else {
+				r1 = sqlGetTempRange(pParse, argc);
+			}
+
+			sqlExprCachePush(pParse);
+			sqlExprCodeExprList(pParse, args, r1, 0,
+					    SQL_ECEL_DUP | SQL_ECEL_FACTOR);
+			sqlExprCachePop(pParse);
+		} else {
+			r1 = 0;
+		}
+		sqlVdbeAddOp4(v, OP_FunctionByName, mask, r1, target,
+			      sqlDbStrNDup(pParse->db, name, strlen(name)),
+			      P4_DYNAMIC);
+		sqlVdbeChangeP5(v, argc);
+		if (argc != 0 && mask == 0)
+			sqlReleaseTempRange(pParse, r1, argc);
+		return target;
+	}
+	case TK_BUILT_IN_FUNC: {
 			ExprList *pFarg;	/* List of function arguments */
 			int nFarg;	/* Number of function arguments */
 			u32 constMask = 0;	/* Mask of function arguments that are constant */
@@ -4080,18 +4171,8 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				sqlVdbeAddOp4(v, OP_CollSeq, 0, 0, 0,
 						  (char *)coll, P4_COLLSEQ);
 			}
-			if (func->def->language == FUNC_LANGUAGE_SQL_BUILTIN) {
-				sqlVdbeAddOp4(v, OP_BuiltinFunction0, constMask,
-					      r1, target, (char *)func,
-					      P4_FUNC);
-			} else {
-				sqlVdbeAddOp4(v, OP_FunctionByName, constMask,
-					      r1, target,
-					      sqlDbStrNDup(pParse->db,
-							   func->def->name,
-							   func->def->name_len),
-					      P4_DYNAMIC);
-			}
+			sqlVdbeAddOp4(v, OP_BuiltinFunction0, constMask, r1,
+				      target, (char *)func, P4_FUNC);
 			sqlVdbeChangeP5(v, (u8) nFarg);
 			if (nFarg && constMask == 0) {
 				sqlReleaseTempRange(pParse, r1, nFarg);
@@ -5031,7 +5112,7 @@ sqlExprCompare(Expr * pA, Expr * pB, int iTab)
 	}
 	if (pA->op != TK_COLUMN_REF && pA->op != TK_AGG_COLUMN &&
 	    pA->u.zToken) {
-		if (pA->op == TK_FUNCTION) {
+		if (pA->op == TK_BUILT_IN_FUNC) {
 			if (sqlStrICmp(pA->u.zToken, pB->u.zToken) != 0)
 				return 2;
 		} else if (strcmp(pA->u.zToken, pB->u.zToken) != 0) {

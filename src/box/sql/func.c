@@ -1907,7 +1907,7 @@ groupConcatFinalize(sql_context * context)
 int
 sql_is_like_func(struct Expr *expr)
 {
-	if (expr->op != TK_FUNCTION || !expr->x.pList ||
+	if (expr->op != TK_BUILT_IN_FUNC || !expr->x.pList ||
 	    expr->x.pList->nExpr != 2)
 		return 0;
 	assert(!ExprHasProperty(expr, EP_xIsSelect));

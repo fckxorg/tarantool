@@ -53,6 +53,7 @@ extras="            \
     LINEFEED        \
     SPACE           \
     ILLEGAL         \
+    BUILT_IN_FUNC   \
 "
 
 IFS=" "

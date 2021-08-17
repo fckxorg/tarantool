@@ -2703,6 +2703,11 @@ Expr *sqlExprFunction(Parse *, ExprList *, Token *);
 void sqlExprAssignVarNumber(Parse *, Expr *, u32);
 ExprList *sqlExprListAppendVector(Parse *, ExprList *, IdList *, Expr *);
 
+/** Construct a new expression node for a built-in function. */
+struct Expr *
+sql_expr_new_built_in(struct Parse *parser, struct ExprList *list,
+		      struct Token *token);
+
 /**
  * Set the sort order for the last element on the given ExprList.
  *
@@ -4391,6 +4396,10 @@ sql_func_flag_is_set(struct func *func, uint16_t flag)
 /** Return a function that matches the parameters described in given expr. */
 struct func *
 sql_func_find(struct Expr *expr);
+
+/** Return user-defined function with given name and number of arguments. */
+struct func *
+sql_func_by_signature(const char *name, uint32_t argc);
 
 /**
  * Return the parameters of the function with the given name. If the function

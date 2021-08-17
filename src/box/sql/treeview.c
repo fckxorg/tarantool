@@ -481,6 +481,7 @@ sqlTreeViewExpr(TreeView * pView, const Expr * pExpr, u8 moreToFollow)
 		}
 
 	case TK_AGG_FUNCTION:
+	case TK_BUILT_IN_FUNC:
 	case TK_FUNCTION:{
 			ExprList *pFarg;	/* List of function arguments */
 			if (ExprHasProperty(pExpr, EP_TokenOnly)) {

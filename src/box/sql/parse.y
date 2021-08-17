@@ -1125,7 +1125,7 @@ expr(A) ::= CAST(X) LP expr(E) AS typedef(T) RP(Y). {
 }
 
 expr(A) ::= TRIM(X) LP trim_operands(Y) RP(E). {
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
 }
 
@@ -1179,7 +1179,7 @@ expr(A) ::= ABS(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1192,7 +1192,7 @@ expr(A) ::= AVG(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1206,7 +1206,7 @@ expr(A) ::= CHAR(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1221,7 +1221,7 @@ expr(A) ::= CHAR_LEN(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1237,7 +1237,7 @@ expr(A) ::= COALESCE(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1250,14 +1250,14 @@ expr(A) ::= COUNT(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
 }
 
 expr(A) ::= COUNT(X) LP STAR RP(E). {
-  A.pExpr = sqlExprFunction(pParse, NULL, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, NULL, &X);
   spanSet(&A, &X, &E);
 }
 
@@ -1271,7 +1271,7 @@ expr(A) ::= GREATEST(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1285,7 +1285,7 @@ expr(A) ::= GROUP_CONCAT(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1298,7 +1298,7 @@ expr(A) ::= HEX(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1311,7 +1311,7 @@ expr(A) ::= IFNULL(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1327,7 +1327,7 @@ expr(A) ::= LEAST(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1340,7 +1340,7 @@ expr(A) ::= LENGTH(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1353,7 +1353,7 @@ expr(A) ::= LIKELIHOOD(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1366,7 +1366,7 @@ expr(A) ::= LIKELY(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1379,7 +1379,7 @@ expr(A) ::= LOWER(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1392,7 +1392,7 @@ expr(A) ::= MAX(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1405,7 +1405,7 @@ expr(A) ::= MIN(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1418,7 +1418,7 @@ expr(A) ::= NULLIF(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1431,7 +1431,7 @@ expr(A) ::= POSITION(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1445,7 +1445,7 @@ expr(A) ::= PRINTF(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1458,7 +1458,7 @@ expr(A) ::= QUOTE(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1470,7 +1470,7 @@ expr(A) ::= RANDOM(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1483,7 +1483,7 @@ expr(A) ::= RANDOMBLOB(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1496,7 +1496,7 @@ expr(A) ::= REPLACE(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1510,7 +1510,7 @@ expr(A) ::= ROUND(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1522,7 +1522,7 @@ expr(A) ::= ROW_COUNT(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1535,7 +1535,7 @@ expr(A) ::= SOUNDEX(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1549,7 +1549,7 @@ expr(A) ::= SUBSTR(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1562,7 +1562,7 @@ expr(A) ::= SUM(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1575,7 +1575,7 @@ expr(A) ::= TOTAL(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1588,7 +1588,7 @@ expr(A) ::= TYPEOF(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1601,7 +1601,7 @@ expr(A) ::= UNICODE(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1614,7 +1614,7 @@ expr(A) ::= UNLIKELY(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1627,7 +1627,7 @@ expr(A) ::= UPPER(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1640,7 +1640,7 @@ expr(A) ::= UUID(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1652,7 +1652,7 @@ expr(A) ::= VERSION(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1665,7 +1665,7 @@ expr(A) ::= ZEROBLOB(X) LP distinct(D) exprlist(Y) RP(E). {
     pParse->is_aborted = true;
     return;
   }
-  A.pExpr = sqlExprFunction(pParse, Y, &X);
+  A.pExpr = sql_expr_new_built_in(pParse, Y, &X);
   spanSet(&A, &X, &E);
   if(D == SF_Distinct && A.pExpr)
     A.pExpr->flags |= EP_Distinct;
@@ -1753,7 +1753,7 @@ expr(A) ::= expr(A) likeop(OP) expr(Y).  [LIKE_KW]  {
   OP.n &= 0x7fffffff;
   pList = sql_expr_list_append(pParse->db,NULL, Y.pExpr);
   pList = sql_expr_list_append(pParse->db,pList, A.pExpr);
-  A.pExpr = sqlExprFunction(pParse, pList, &OP);
+  A.pExpr = sql_expr_new_built_in(pParse, pList, &OP);
   exprNot(pParse, bNot, &A);
   A.zEnd = Y.zEnd;
   if( A.pExpr ) A.pExpr->flags |= EP_InfixFunc;
@@ -1765,7 +1765,7 @@ expr(A) ::= expr(A) likeop(OP) expr(Y) ESCAPE expr(E).  [LIKE_KW]  {
   pList = sql_expr_list_append(pParse->db,NULL, Y.pExpr);
   pList = sql_expr_list_append(pParse->db,pList, A.pExpr);
   pList = sql_expr_list_append(pParse->db,pList, E.pExpr);
-  A.pExpr = sqlExprFunction(pParse, pList, &OP);
+  A.pExpr = sql_expr_new_built_in(pParse, pList, &OP);
   exprNot(pParse, bNot, &A);
   A.zEnd = E.zEnd;
   if( A.pExpr ) A.pExpr->flags |= EP_InfixFunc;

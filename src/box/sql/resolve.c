@@ -589,7 +589,27 @@ resolveExprStep(Walker * pWalker, Expr * pExpr)
 
 		/* Resolve function names
 		 */
-	case TK_FUNCTION:{
+	case TK_FUNCTION: {
+		struct ExprList *args = pExpr->x.pList;
+		uint32_t argc = args == NULL ? 0 : args->nExpr;
+
+		assert(!ExprHasProperty(pExpr, EP_xIsSelect));
+		const char *name = pExpr->u.zToken;
+		struct func *func = sql_func_by_signature(name, argc);
+		if (func == NULL) {
+			pParse->is_aborted = true;
+			pNC->nErr++;
+			return WRC_Abort;
+		}
+		pExpr->type = func->def->returns;
+		assert(!func->def->is_deterministic ||
+		       (pNC->ncFlags & NC_IdxExpr) == 0);
+		if (func->def->is_deterministic)
+			ExprSetProperty(pExpr, EP_ConstFunc);
+		sqlWalkExprList(pWalker, args);
+		return WRC_Prune;
+	}
+	case TK_BUILT_IN_FUNC: {
 			ExprList *pList = pExpr->x.pList;	/* The argument list */
 			int n = pList ? pList->nExpr : 0;	/* Number of arguments */
 			int nId;	/* Number of characters in function name */
@@ -1453,7 +1473,7 @@ resolveSelectStep(Walker * pWalker, Select * p)
  * Function calls are checked to make sure that the function is
  * defined and that the correct number of arguments are specified.
  * If the function is an aggregate function, then the NC_HasAgg flag is
- * set and the opcode is changed from TK_FUNCTION to TK_AGG_FUNCTION.
+ * set and the opcode is changed from TK_BUILT_IN_FUNC to TK_AGG_FUNCTION.
  * If an expression contains aggregate functions then the EP_Agg
  * property on the expression is set.
  *

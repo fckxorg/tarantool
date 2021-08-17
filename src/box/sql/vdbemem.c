@@ -332,7 +332,7 @@ valueFromExpr(sql * db,	/* The database connection */
 	}
 #endif
 
-	else if (op == TK_FUNCTION && pCtx != 0) {
+	else if (op == TK_BUILT_IN_FUNC && pCtx != 0) {
 		rc = valueFromFunction(db, pExpr, type, &pVal, pCtx);
 	}
 
