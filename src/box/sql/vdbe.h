@@ -97,6 +97,8 @@ struct VdbeOp {
 		 * Information about ephemeral space field types and key parts.
 		 */
 		struct sql_space_info *space_info;
+		/* Finalize method for SQL built-in aggregate function. */
+		void (*finalize)(sql_context *ctx);
 	} p4;
 #ifdef SQL_ENABLE_EXPLAIN_COMMENTS
 	char *zComment;		/* Comment to improve readability */

@@ -4221,7 +4221,7 @@ case OP_AggFinal: {
 	mem_create(&t);
 	ctx.pOut = &t;
 	ctx.pMem = pMem;
-	((struct func_sql_builtin *)pOp->p4.func)->finalize(&ctx);
+	pOp->p4.finalize(&ctx);
 	if (ctx.is_aborted)
 		goto abort_due_to_error;
 	assert((pMem->flags & MEM_Dyn) == 0);

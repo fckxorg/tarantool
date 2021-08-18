@@ -3008,9 +3008,31 @@ int
 sql_emit_func_finalize(struct Vdbe *vdbe, struct Expr *expr, int reg,
 		       uint8_t argc)
 {
-	struct func *func = sql_func_find(expr);
-	if (func == NULL)
-		return -1;
-	sqlVdbeAddOp4(vdbe, OP_AggFinal, reg, argc, 0, (char *)func, P4_FUNC);
+	void (*finalize)(sql_context *ctx);
+	switch(expr->func_id) {
+	case TK_AVG:
+		finalize = avgFinalize;
+		break;
+	case TK_SUM:
+		finalize = sumFinalize;
+		break;
+	case TK_COUNT:
+		finalize = countFinalize;
+		break;
+	case TK_TOTAL:
+		finalize = totalFinalize;
+		break;
+	case TK_GROUP_CONCAT:
+		finalize = groupConcatFinalize;
+		break;
+	case TK_MAX:
+	case TK_MIN:
+		finalize = minMaxFinalize;
+		break;
+	default:
+		unreachable();
+	}
+	sqlVdbeAddOp4(vdbe, OP_AggFinal, reg, argc, 0, (char *)finalize,
+		      P4_STATIC);
 	return 0;
 }
