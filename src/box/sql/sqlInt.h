@@ -4411,6 +4411,14 @@ sql_func_flags(uint8_t id);
 enum field_type
 sql_func_result(struct Expr *expr);
 
+int
+sql_emit_func_call(struct Vdbe *vdbe, struct Expr *expr, int op, int mask,
+		   int r1, int r2, uint8_t argc);
+
+int
+sql_emit_func_finalize(struct Vdbe *vdbe, struct Expr *expr, int reg,
+		       uint8_t argc);
+
 /**
  * Generate VDBE code to halt execution with correct error if
  * the object with specified key is already present (or doesn't

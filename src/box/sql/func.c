@@ -2881,3 +2881,26 @@ sql_func_result(struct Expr *expr)
 	}
 	return field_type_MAX;
 }
+
+int
+sql_emit_func_call(struct Vdbe *vdbe, struct Expr *expr, int op, int mask,
+		   int r1, int r2, uint8_t argc)
+{
+	struct func *func = sql_func_find(expr);
+	if (func == NULL)
+		return -1;
+	sqlVdbeAddOp4(vdbe, op, mask, r1, r2, (char *)func, P4_FUNC);
+	sqlVdbeChangeP5(vdbe, argc);
+	return 0;
+}
+
+int
+sql_emit_func_finalize(struct Vdbe *vdbe, struct Expr *expr, int reg,
+		       uint8_t argc)
+{
+	struct func *func = sql_func_find(expr);
+	if (func == NULL)
+		return -1;
+	sqlVdbeAddOp4(vdbe, OP_AggFinal, reg, argc, 0, (char *)func, P4_FUNC);
+	return 0;
+}

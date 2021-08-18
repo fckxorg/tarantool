@@ -5572,10 +5572,8 @@ finalizeAggFunctions(Parse * pParse, AggInfo * pAggInfo)
 	for (i = 0, pF = pAggInfo->aFunc; i < pAggInfo->nFunc; i++, pF++) {
 		ExprList *pList = pF->pExpr->x.pList;
 		assert(!ExprHasProperty(pF->pExpr, EP_xIsSelect));
-		sqlVdbeAddOp2(v, OP_AggFinal, pF->iMem,
-				  pList ? pList->nExpr : 0);
-		struct func *func = sql_func_find(pF->pExpr);
-		sqlVdbeAppendP4(v, func, P4_FUNC);
+		sql_emit_func_finalize(v, pF->pExpr, pF->iMem,
+				       pList ? pList->nExpr : 0);
 	}
 }
 
@@ -5634,10 +5632,8 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 			sqlVdbeAddOp4(v, OP_CollSeq, regHit, 0, 0,
 					  (char *)coll, P4_COLLSEQ);
 		}
-		sqlVdbeAddOp3(v, OP_AggStep0, 0, regAgg, pF->iMem);
-		struct func *func = sql_func_find(pF->pExpr);
-		sqlVdbeAppendP4(v, func, P4_FUNC);
-		sqlVdbeChangeP5(v, (u8) nArg);
+		sql_emit_func_call(v, pF->pExpr, OP_AggStep0, 0, regAgg,
+				   pF->iMem, nArg);
 		sql_expr_type_cache_change(pParse, regAgg, nArg);
 		sqlReleaseTempRange(pParse, regAgg, nArg);
 		if (addrNext) {

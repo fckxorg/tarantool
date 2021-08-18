@@ -4168,14 +4168,12 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				sqlVdbeAddOp4(v, OP_CollSeq, 0, 0, 0,
 						  (char *)coll, P4_COLLSEQ);
 			}
-			struct func *func = sql_func_find(pExpr);
-			if (func == NULL) {
+			if (sql_emit_func_call(v, pExpr, OP_BuiltinFunction0,
+					       constMask, r1, target,
+					       nFarg) != 0) {
 				pParse->is_aborted = true;
 				break;
 			}
-			sqlVdbeAddOp4(v, OP_BuiltinFunction0, constMask, r1,
-				      target, (char *)func, P4_FUNC);
-			sqlVdbeChangeP5(v, (u8) nFarg);
 			if (nFarg && constMask == 0) {
 				sqlReleaseTempRange(pParse, r1, nFarg);
 			}
