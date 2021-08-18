@@ -4168,7 +4168,7 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				sqlVdbeAddOp4(v, OP_CollSeq, 0, 0, 0,
 						  (char *)coll, P4_COLLSEQ);
 			}
-			if (sql_emit_func_call(v, pExpr, OP_BuiltinFunction0,
+			if (sql_emit_func_call(v, pExpr, OP_BuiltinFunction,
 					       constMask, r1, target,
 					       nFarg) != 0) {
 				pParse->is_aborted = true;

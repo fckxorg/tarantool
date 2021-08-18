@@ -2889,7 +2889,18 @@ sql_emit_func_call(struct Vdbe *vdbe, struct Expr *expr, int op, int mask,
 	struct func *func = sql_func_find(expr);
 	if (func == NULL)
 		return -1;
-	sqlVdbeAddOp4(vdbe, op, mask, r1, r2, (char *)func, P4_FUNC);
+	uint32_t size = sizeof(struct sql_context);
+	if (argc > 1)
+		size += (argc - 1) * sizeof(struct Mem);
+	struct sql_context *ctx = sqlDbMallocRawNN(sql_get(), size);
+	if (ctx == NULL)
+		return -1;
+	ctx->pOut = NULL;
+	ctx->func = func;
+	ctx->iOp = 0;
+	ctx->pVdbe = vdbe;
+	ctx->argc = argc;
+	sqlVdbeAddOp4(vdbe, op, mask, r1, r2, (char *)ctx, P4_FUNCCTX);
 	sqlVdbeChangeP5(vdbe, argc);
 	return 0;
 }

@@ -5632,7 +5632,7 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 			sqlVdbeAddOp4(v, OP_CollSeq, regHit, 0, 0,
 					  (char *)coll, P4_COLLSEQ);
 		}
-		sql_emit_func_call(v, pF->pExpr, OP_AggStep0, 0, regAgg,
+		sql_emit_func_call(v, pF->pExpr, OP_AggStep, 0, regAgg,
 				   pF->iMem, nArg);
 		sql_expr_type_cache_change(pParse, regAgg, nArg);
 		sqlReleaseTempRange(pParse, regAgg, nArg);

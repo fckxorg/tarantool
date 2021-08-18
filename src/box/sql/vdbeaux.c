@@ -1070,7 +1070,7 @@ displayP4(Op * pOp, char *zTemp, int nTemp)
 		}
 #if defined(SQL_DEBUG) || defined(VDBE_PROFILE)
 	case P4_FUNCCTX:{
-			struct func *func = pOp->p4.func;
+			struct func *func = pOp->p4.pCtx->func;
 			sqlXPrintf(&x, "%s(%d)", func->def->name,
 				   func->def->param_count);
 			break;

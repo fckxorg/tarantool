@@ -725,7 +725,7 @@ callStatGet(Vdbe * v, int regStat4, int iParam, int regOut)
 	 */
 	struct func *func = sql_func_by_signature("_sql_stat_get", 2);
 	assert(func != NULL);
-	sqlVdbeAddOp4(v, OP_BuiltinFunction0, 0, regStat4, regOut,
+	sqlVdbeAddOp4(v, OP_BuiltinFunction, 0, regStat4, regOut,
 		      (char *)func, P4_FUNC);
 	sqlVdbeChangeP5(v, 2);
 }
@@ -869,7 +869,7 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 		struct func *init_func =
 			sql_func_by_signature("_sql_stat_init", 3);
 		assert(init_func != NULL);
-		sqlVdbeAddOp4(v, OP_BuiltinFunction0, 0, stat4_reg + 1,
+		sqlVdbeAddOp4(v, OP_BuiltinFunction, 0, stat4_reg + 1,
 			      stat4_reg, (char *)init_func, P4_FUNC);
 		sqlVdbeChangeP5(v, 3);
 		/*
@@ -974,7 +974,7 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 		struct func *push_func =
 			sql_func_by_signature("_sql_stat_push", 3);
 		assert(push_func != NULL);
-		sqlVdbeAddOp4(v, OP_BuiltinFunction0, 1, stat4_reg, tmp_reg,
+		sqlVdbeAddOp4(v, OP_BuiltinFunction, 1, stat4_reg, tmp_reg,
 			      (char *)push_func, P4_FUNC);
 		sqlVdbeChangeP5(v, 3);
 		sqlVdbeAddOp2(v, OP_Next, idx_cursor, next_row_addr);
