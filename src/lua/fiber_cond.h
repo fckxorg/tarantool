@@ -35,6 +35,8 @@
 extern "C" {
 #endif /* defined(__cplusplus) */
 
+static const char cond_typename[] = "fiber.cond";
+
 struct lua_State;
 void tarantool_lua_fiber_cond_init(struct lua_State *L);
 
