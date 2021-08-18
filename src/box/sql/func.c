@@ -132,8 +132,7 @@ minmaxFunc(sql_context * context, int argc, sql_value ** argv)
 	int i;
 	int iBest;
 	struct coll *pColl;
-	struct func *func = context->func;
-	int mask = sql_func_flag_is_set(func, SQL_FUNC_MAX) ? -1 : 0;
+	int mask = (context->flags & SQL_FUNC_MAX) != 0 ? -1 : 0;
 	if (argc < 2) {
 		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
 		mask ? "GREATEST" : "LEAST", "at least two", argc);
@@ -1799,8 +1798,6 @@ minmaxStep(sql_context * context, int NotUsed, sql_value ** argv)
 	Mem *pBest;
 	UNUSED_PARAMETER(NotUsed);
 
-	struct func_sql_builtin *func =
-		(struct func_sql_builtin *)context->func;
 	pBest = sql_context_agg_mem(context);
 	if (!pBest)
 		return;
@@ -1816,7 +1813,7 @@ minmaxStep(sql_context * context, int NotUsed, sql_value ** argv)
 		 * between the two being that the sense of the
 		 * comparison is inverted.
 		 */
-		bool is_max = (func->flags & SQL_FUNC_MAX) != 0;
+		bool is_max = (context->flags & SQL_FUNC_MAX) != 0;
 		int cmp = mem_cmp_scalar(pBest, pArg, pColl);
 		if ((is_max && cmp < 0) || (!is_max && cmp > 0)) {
 			mem_copy(pBest, pArg);
@@ -1930,9 +1927,7 @@ static void
 sql_builtin_stub(sql_context *ctx, int argc, sql_value **argv)
 {
 	(void) argc; (void) argv;
-	diag_set(ClientError, ER_SQL_EXECUTE,
-		 tt_sprintf("function '%s' is not implemented",
-			    ctx->func->def->name));
+	diag_set(ClientError, ER_SQL_EXECUTE, "function is not implemented");
 	ctx->is_aborted = true;
 }
 
@@ -2886,20 +2881,124 @@ int
 sql_emit_func_call(struct Vdbe *vdbe, struct Expr *expr, int op, int mask,
 		   int r1, int r2, uint8_t argc)
 {
-	struct func *func = sql_func_find(expr);
-	if (func == NULL)
-		return -1;
 	uint32_t size = sizeof(struct sql_context);
 	if (argc > 1)
 		size += (argc - 1) * sizeof(struct Mem);
 	struct sql_context *ctx = sqlDbMallocRawNN(sql_get(), size);
 	if (ctx == NULL)
 		return -1;
+	switch(expr->func_id) {
+	case TK_ABS:
+		ctx->call = absFunc;
+		break;
+	case TK_AVG:
+	case TK_SUM:
+		ctx->call = sum_step;
+		break;
+	case TK_CHAR:
+		ctx->call = charFunc;
+		break;
+	case TK_CHAR_LEN:
+	case TK_LENGTH:
+		ctx->call = lengthFunc;
+		break;
+	case TK_COALESCE:
+	case TK_IFNULL:
+	case TK_LIKELIHOOD:
+	case TK_LIKELY:
+	case TK_UNLIKELY:
+		ctx->call = sql_builtin_stub;
+		break;
+	case TK_COUNT:
+		ctx->call = countStep;
+		break;
+	case TK_GREATEST:
+	case TK_LEAST:
+		ctx->call = minmaxFunc;
+		break;
+	case TK_GROUP_CONCAT:
+		ctx->call = groupConcatStep;
+		break;
+	case TK_HEX:
+		ctx->call = hexFunc;
+		break;
+	case TK_LIKE_KW:
+		ctx->call = likeFunc;
+		break;
+	case TK_LOWER:
+		ctx->call = LowerICUFunc;
+		break;
+	case TK_MAX:
+	case TK_MIN:
+		ctx->call = minmaxStep;
+		break;
+	case TK_NULLIF:
+		ctx->call = nullifFunc;
+		break;
+	case TK_POSITION:
+		ctx->call = position_func;
+		break;
+	case TK_PRINTF:
+		ctx->call = printfFunc;
+		break;
+	case TK_QUOTE:
+		ctx->call = quoteFunc;
+		break;
+	case TK_RANDOM:
+		ctx->call = randomFunc;
+		break;
+	case TK_RANDOMBLOB:
+		ctx->call = randomBlob;
+		break;
+	case TK_REPLACE:
+		ctx->call = replaceFunc;
+		break;
+	case TK_ROUND:
+		ctx->call = roundFunc;
+		break;
+	case TK_ROW_COUNT:
+		ctx->call = sql_row_count;
+		break;
+	case TK_SOUNDEX:
+		ctx->call = soundexFunc;
+		break;
+	case TK_SUBSTR:
+		ctx->call = substrFunc;
+		break;
+	case TK_TOTAL:
+		ctx->call = total_step;
+		break;
+	case TK_TRIM:
+		ctx->call = trim_func;
+		break;
+	case TK_TYPEOF:
+		ctx->call = typeofFunc;
+		break;
+	case TK_UNICODE:
+		ctx->call = unicodeFunc;
+		break;
+	case TK_UPPER:
+		ctx->call = UpperICUFunc;
+		break;
+	case TK_UUID:
+		ctx->call = sql_func_uuid;
+		break;
+	case TK_VERSION:
+		ctx->call = sql_func_version;
+		break;
+	case TK_ZEROBLOB:
+		ctx->call = zeroblobFunc;
+		break;
+	default:
+		unreachable();
+	}
+	assert(strlen(expr->u.zToken) < 24);
+	strcpy(ctx->name, expr->u.zToken);
 	ctx->pOut = NULL;
-	ctx->func = func;
 	ctx->iOp = 0;
 	ctx->pVdbe = vdbe;
 	ctx->argc = argc;
+	ctx->flags = sql_func_flags(expr->func_id);
 	sqlVdbeAddOp4(vdbe, op, mask, r1, r2, (char *)ctx, P4_FUNCCTX);
 	sqlVdbeChangeP5(vdbe, argc);
 	return 0;

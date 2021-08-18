@@ -169,9 +169,8 @@ struct VdbeFrame {
  * (Mem) which are only defined there.
  */
 struct sql_context {
+	char name[24];
 	Mem *pOut;		/* The return value is stored here */
-	/* A pointer to function implementation. */
-	struct func *func;
 	Mem *pMem;		/* Memory cell used to store aggregate context */
 	Vdbe *pVdbe;		/* The VM that owns this context */
 	/** Instruction number of OP_BuiltinFunction or OP_AggStep. */
@@ -183,6 +182,9 @@ struct sql_context {
 	bool is_aborted;
 	u8 skipFlag;		/* Skip accumulator loading if true */
 	u8 argc;		/* Number of arguments */
+	uint32_t flags;
+	/* Implementation of SQL built-in function. */
+	void (*call)(struct sql_context *ctx, int argc, struct Mem **argv);
 	sql_value *argv[1];	/* Argument set */
 };
 

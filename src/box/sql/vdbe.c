@@ -1221,9 +1221,7 @@ case OP_BuiltinFunction: {
 	}
 #endif
 	pCtx->is_aborted = false;
-	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
-	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
-	func->call(pCtx, pCtx->argc, pCtx->argv);
+	pCtx->call(pCtx, pCtx->argc, pCtx->argv);
 
 	/* If the function returned an error, throw an exception */
 	if (pCtx->is_aborted)
@@ -4185,9 +4183,7 @@ case OP_AggStep: {
 	pCtx->pOut = &t;
 	pCtx->is_aborted = false;
 	pCtx->skipFlag = 0;
-	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
-	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
-	func->call(pCtx, pCtx->argc, pCtx->argv);
+	pCtx->call(pCtx, pCtx->argc, pCtx->argv);
 	if (pCtx->is_aborted) {
 		mem_destroy(&t);
 		goto abort_due_to_error;
