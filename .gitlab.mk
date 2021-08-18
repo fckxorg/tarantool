@@ -122,7 +122,7 @@ S3_BUCKET_URL="s3://tarantool_repo/sources/$(BUCKET)"
 
 deploy_prepare:
 	[ -d packpack ] || \
-		git clone https://github.com/packpack/packpack.git packpack
+		git clone https://github.com/VitaliyaIoffe/packpack.git packpack
 	rm -rf build
 
 package: deploy_prepare
