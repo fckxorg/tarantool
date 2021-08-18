@@ -1062,12 +1062,6 @@ displayP4(Op * pOp, char *zTemp, int nTemp)
 				sqlXPrintf(&x, "(binary)");
 			break;
 		}
-	case P4_FUNC:{
-			struct func *func = pOp->p4.func;
-			sqlXPrintf(&x, "%s(%d)", func->def->name,
-				   func->def->param_count);
-			break;
-		}
 #if defined(SQL_DEBUG) || defined(VDBE_PROFILE)
 	case P4_FUNCCTX:{
 			sqlXPrintf(&x, "%s(%d)", pOp->p4.pCtx->name,

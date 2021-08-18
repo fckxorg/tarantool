@@ -4359,48 +4359,6 @@ Expr *sqlExprForVectorField(Parse *, Expr *, int);
  */
 extern int sqlSubProgramsRemaining;
 
-struct func_sql_builtin {
-	/** Function object base class. */
-	struct func base;
-	/** A bitmask of SQL flags. */
-	uint16_t flags;
-	/**
-	 * A VDBE-memory-compatible call method.
-	 * SQL built-ins don't use func base class "call"
-	 * method to provide a best performance for SQL requests.
-	 * Access checks are redundant, because all SQL built-ins
-	 * are predefined and are executed on SQL privilege level.
-	 */
-	void (*call)(sql_context *ctx, int argc, sql_value **argv);
-	/**
-	 * A VDBE-memory-compatible finalize method
-	 * (is valid only for aggregate function).
-	 */
-	void (*finalize)(sql_context *ctx);
-};
-
-/**
- * Test whether SQL-specific flag is set for given function.
- * Currently only SQL Builtin Functions have such hint flags,
- * so function returns false for other functions. Such approach
- * decreases code complexity and allows do not distinguish
- * functions by implementation details where it is unnecessary.
- *
- * Returns true when given flag is set for a given function and
- * false otherwise.
- */
-static inline bool
-sql_func_flag_is_set(struct func *func, uint16_t flag)
-{
-	if (func->def->language != FUNC_LANGUAGE_SQL_BUILTIN)
-		return false;
-	return (((struct func_sql_builtin *)func)->flags & flag) != 0;
-}
-
-/** Return a function that matches the parameters described in given expr. */
-struct func *
-sql_func_find(struct Expr *expr);
-
 /** Return user-defined function with given name and number of arguments. */
 struct func *
 sql_func_by_signature(const char *name, uint32_t argc);

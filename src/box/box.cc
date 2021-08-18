@@ -3056,7 +3056,6 @@ box_free(void)
 		gc_free();
 		engine_shutdown();
 		wal_free();
-		sql_built_in_functions_cache_free();
 	}
 }
 

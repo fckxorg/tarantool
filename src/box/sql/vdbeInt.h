@@ -46,8 +46,6 @@
  */
 typedef struct VdbeOp Op;
 
-struct func;
-
 /*
  * Boolean values
  */
