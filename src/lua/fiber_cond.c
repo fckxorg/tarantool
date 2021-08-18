@@ -38,8 +38,6 @@
 
 #include <fiber_cond.h>
 
-static const char cond_typename[] = "fiber.cond";
-
 static int
 luaT_fiber_cond_new(struct lua_State *L)
 {
