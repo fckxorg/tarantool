@@ -4219,8 +4219,20 @@ case OP_AggFinal: {
 	assert(pOp->p1>0 && pOp->p1<=(p->nMem+1 - p->nCursor));
 	pMem = &aMem[pOp->p1];
 	assert(mem_is_null(pMem) || mem_is_agg(pMem));
-	if (sql_vdbemem_finalize(pMem, pOp->p4.func) != 0)
+	struct sql_context ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	struct Mem t;
+	mem_create(&t);
+	ctx.pOut = &t;
+	ctx.pMem = pMem;
+	((struct func_sql_builtin *)pOp->p4.func)->finalize(&ctx);
+	if (ctx.is_aborted)
 		goto abort_due_to_error;
+	assert((pMem->flags & MEM_Dyn) == 0);
+	if (pMem->szMalloc > 0)
+		sqlDbFree(pMem->db, pMem->zMalloc);
+	memcpy(pMem, &t, sizeof(t));
+
 	UPDATE_MAX_BLOBSIZE(pMem);
 	if (sqlVdbeMemTooBig(pMem)) {
 		goto too_big;

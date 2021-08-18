@@ -70,11 +70,6 @@ struct Mem {
 		bool b;         /* Boolean value used when MEM_Bool is set in flags */
 		int nZero;	/* Used when bit MEM_Zero is set in flags */
 		void *p;	/* Generic pointer */
-		/**
-		 * A pointer to function implementation.
-		 * Used only when flags==MEM_Agg.
-		 */
-		struct func *func;
 		struct VdbeFrame *pFrame;	/* Used when flags==MEM_Frame */
 		struct tt_uuid uuid;
 		decimal_t d;
@@ -569,7 +564,7 @@ mem_set_frame(struct Mem *mem, struct VdbeFrame *frame);
  * hold the accumulation structure for the aggregate function.
  */
 int
-mem_set_agg(struct Mem *mem, struct func *func, int size);
+mem_set_agg(struct Mem *mem, int size);
 
 /** Clear MEM and set it to special, "cleared", NULL. */
 void
@@ -960,18 +955,6 @@ int sqlVdbeMemTooBig(Mem *);
  */
 #define VdbeMemDynamic(X) (((X)->flags & MEM_Dyn) != 0 ||\
 			   ((X)->type & (MEM_TYPE_AGG | MEM_TYPE_FRAME)) != 0)
-
-/** MEM manipulate functions. */
-
-/**
- * Memory cell mem contains the context of an aggregate function.
- * This routine calls the finalize method for that function. The
- * result of the aggregate is stored back into mem.
- *
- * Returns -1 if the finalizer reports an error. 0 otherwise.
- */
-int
-sql_vdbemem_finalize(struct Mem *mem, struct func *func);
 
 /**
  * Perform comparison of two tuples: unpacked (key1) and packed (key2)

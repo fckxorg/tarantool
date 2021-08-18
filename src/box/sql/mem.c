@@ -217,11 +217,7 @@ mem_create(struct Mem *mem)
 static inline void
 mem_clear(struct Mem *mem)
 {
-	if ((mem->type & (MEM_TYPE_AGG | MEM_TYPE_FRAME)) != 0 ||
-	    (mem->flags & MEM_Dyn) != 0) {
-		if (mem->type == MEM_TYPE_AGG)
-			sql_vdbemem_finalize(mem, mem->u.func);
-		assert(mem->type != MEM_TYPE_AGG);
+	if (mem->type == MEM_TYPE_FRAME || (mem->flags & MEM_Dyn) != 0) {
 		if ((mem->flags & MEM_Dyn) != 0) {
 			assert(mem->xDel != SQL_DYNAMIC && mem->xDel != NULL);
 			mem->xDel((void *)mem->z);
@@ -610,7 +606,7 @@ mem_set_frame(struct Mem *mem, struct VdbeFrame *frame)
 }
 
 int
-mem_set_agg(struct Mem *mem, struct func *func, int size)
+mem_set_agg(struct Mem *mem, int size)
 {
 	mem_clear(mem);
 	if (size <= 0)
@@ -621,7 +617,6 @@ mem_set_agg(struct Mem *mem, struct func *func, int size)
 	mem->n = size;
 	mem->type = MEM_TYPE_AGG;
 	assert(mem->flags == 0);
-	mem->u.func = func;
 	return 0;
 }
 
@@ -3043,31 +3038,6 @@ sqlVdbeMemTooBig(Mem * p)
 		return n > p->db->aLimit[SQL_LIMIT_LENGTH];
 	}
 	return 0;
-}
-
-int
-sql_vdbemem_finalize(struct Mem *mem, struct func *func)
-{
-	assert(func != NULL);
-	assert(func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
-	assert(func->def->aggregate == FUNC_AGGREGATE_GROUP);
-	assert(mem->type == MEM_TYPE_NULL || func == mem->u.func);
-	sql_context ctx;
-	memset(&ctx, 0, sizeof(ctx));
-	Mem t;
-	memset(&t, 0, sizeof(t));
-	t.type = MEM_TYPE_NULL;
-	assert(t.flags == 0);
-	t.db = mem->db;
-	ctx.pOut = &t;
-	ctx.pMem = mem;
-	ctx.func = func;
-	((struct func_sql_builtin *)func)->finalize(&ctx);
-	assert((mem->flags & MEM_Dyn) == 0);
-	if (mem->szMalloc > 0)
-		sqlDbFree(mem->db, mem->zMalloc);
-	memcpy(mem, &t, sizeof(t));
-	return ctx.is_aborted ? -1 : 0;
 }
 
 int
