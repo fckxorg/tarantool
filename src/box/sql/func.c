@@ -2162,6 +2162,36 @@ check_quote(struct ExprList *list)
 	return type;
 }
 
+static enum field_type
+check_uuid(struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || is_arithmetic_type(type))
+		return FIELD_TYPE_UUID;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "UUID", "integer", 1,
+		 field_type_strs[type]);
+	return field_type_MAX;
+}
+
+static enum field_type
+check_zeroblob(const char *name, struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || is_arithmetic_type(type))
+		return FIELD_TYPE_VARBINARY;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, name, "integer", 1,
+		 field_type_strs[type]);
+	return field_type_MAX;
+}
+
 enum field_type
 sql_func_result(struct Expr *expr)
 {
@@ -2197,12 +2227,27 @@ sql_func_result(struct Expr *expr)
 		return FIELD_TYPE_INTEGER;
 	case TK_LIKELY:
 	case TK_UNLIKELY:
+	case TK_COALESCE:
+	case TK_IFNULL:
+	case TK_NULLIF:
 		return FIELD_TYPE_SCALAR;
 	case TK_MAX:
 	case TK_MIN:
 		return check_minmax(expr->u.zToken, expr->x.pList);
 	case TK_QUOTE:
 		return check_quote(expr->x.pList);
+	case TK_UUID:
+		return check_uuid(expr->x.pList);
+	case TK_RANDOMBLOB:
+	case TK_ZEROBLOB:
+		return check_zeroblob(expr->u.zToken, expr->x.pList);
+
+	case TK_GREATEST:
+	case TK_LEAST:
+		return FIELD_TYPE_SCALAR;
+
+
+
 	case TK_REPLACE:
 	case TK_SUBSTR:
 	case TK_TRIM:
@@ -2211,18 +2256,8 @@ sql_func_result(struct Expr *expr)
 	case TK_POSITION:
 	case TK_ROUND:
 		return FIELD_TYPE_INTEGER;
-	case TK_COALESCE:
-	case TK_GREATEST:
-	case TK_IFNULL:
-	case TK_LEAST:
-	case TK_NULLIF:
-		return FIELD_TYPE_SCALAR;
 	case TK_LIKELIHOOD:
-	case TK_RANDOMBLOB:
-	case TK_ZEROBLOB:
 		return FIELD_TYPE_VARBINARY;
-	case TK_UUID:
-		return FIELD_TYPE_UUID;
 	default:
 		unreachable();
 	}
