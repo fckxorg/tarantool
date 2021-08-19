@@ -2149,6 +2149,19 @@ check_minmax(const char *name, struct ExprList *list)
 	return field_type_MAX;
 }
 
+static enum field_type
+check_quote(struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || !sql_type_is_numeric(type))
+		return FIELD_TYPE_STRING;
+	return type;
+}
+
 enum field_type
 sql_func_result(struct Expr *expr)
 {
@@ -2176,20 +2189,23 @@ sql_func_result(struct Expr *expr)
 		return check_length(expr->x.pList);
 	case TK_PRINTF:
 	case TK_VERSION:
+	case TK_TYPEOF:
 		return FIELD_TYPE_STRING;
 	case TK_COUNT:
 	case TK_RANDOM:
 	case TK_ROW_COUNT:
 		return FIELD_TYPE_INTEGER;
+	case TK_LIKELY:
+	case TK_UNLIKELY:
+		return FIELD_TYPE_SCALAR;
 	case TK_MAX:
 	case TK_MIN:
 		return check_minmax(expr->u.zToken, expr->x.pList);
-
 	case TK_QUOTE:
+		return check_quote(expr->x.pList);
 	case TK_REPLACE:
 	case TK_SUBSTR:
 	case TK_TRIM:
-	case TK_TYPEOF:
 		return FIELD_TYPE_STRING;
 	case TK_LIKE_KW:
 	case TK_POSITION:
@@ -2202,9 +2218,6 @@ sql_func_result(struct Expr *expr)
 	case TK_NULLIF:
 		return FIELD_TYPE_SCALAR;
 	case TK_LIKELIHOOD:
-	case TK_LIKELY:
-	case TK_UNLIKELY:
-		return FIELD_TYPE_BOOLEAN;
 	case TK_RANDOMBLOB:
 	case TK_ZEROBLOB:
 		return FIELD_TYPE_VARBINARY;
