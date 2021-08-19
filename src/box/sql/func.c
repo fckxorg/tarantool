@@ -1984,8 +1984,8 @@ sql_func_flags(uint8_t id)
 	return 0;
 }
 
-enum field_type
-check_abs(struct ExprList *list)
+static enum field_type
+check_abs(const char *name, struct ExprList *list)
 {
 	assert(list != NULL && list->nExpr == 1);
 	int op = list->a[0].pExpr->op;
@@ -1998,12 +1998,12 @@ check_abs(struct ExprList *list)
 		return FIELD_TYPE_DOUBLE;
 	if (is_arithmetic_type(type))
 		return type;
-	diag_set(ClientError, ER_SQL_PARSER_TYPE_MISMATCH,
-		 field_type_strs[type], "integer, decimal or double");
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, name, "integer, decimal "
+		 "or double", 1, field_type_strs[type]);
 	return field_type_MAX;
 }
 
-enum field_type
+static enum field_type
 check_total(struct ExprList *list)
 {
 	assert(list != NULL && list->nExpr == 1);
@@ -2013,8 +2013,105 @@ check_total(struct ExprList *list)
 	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
 	if (is_null || is_undefined || is_arithmetic_type(type))
 		return FIELD_TYPE_DOUBLE;
-	diag_set(ClientError, ER_SQL_PARSER_TYPE_MISMATCH,
-		 field_type_strs[type], "integer, decimal or double");
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "TOTAL", "double", 1,
+		 field_type_strs[type]);
+	return field_type_MAX;
+}
+
+static enum field_type
+check_char(struct ExprList *list)
+{
+	uint32_t argc = list == NULL ? 0 : list->nExpr;
+	for (uint32_t i = 0; i < argc; ++i) {
+		int op = list->a[i].pExpr->op;
+		enum field_type type = sql_expr_type(list->a[i].pExpr);
+		bool is_null = op == TK_NULL;
+		bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+		if (!is_null && !is_undefined && !is_arithmetic_type(type)) {
+			diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "CHAR",
+				 "integer", i + 1, field_type_strs[type]);
+			return field_type_MAX;
+		}
+	}
+	return FIELD_TYPE_STRING;
+}
+
+static enum field_type
+check_group_concat(struct ExprList *list)
+{
+	assert(list != NULL);
+	assert(list->nExpr == 1 || list->nExpr == 2);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	enum field_type result;
+	if (is_null || is_undefined || type == FIELD_TYPE_STRING) {
+		result = FIELD_TYPE_STRING;
+	} else if (type == FIELD_TYPE_VARBINARY) {
+		result = FIELD_TYPE_VARBINARY;
+	} else {
+		diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "GROUP_CONCAT",
+			 "string or varbinary", 1, field_type_strs[type]);
+		return field_type_MAX;
+	}
+	if (list->nExpr == 1)
+		return result;
+	int op2 = list->a[1].pExpr->op;
+	enum field_type type2 = sql_expr_type(list->a[1].pExpr);
+	bool is_null2 = op2 == TK_NULL;
+	bool is_undefined2 = op2 == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null2 || is_undefined2 || type2 == result)
+		return result;
+	if ((is_null || is_undefined) && type2 == FIELD_TYPE_VARBINARY)
+		return FIELD_TYPE_VARBINARY;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "GROUP_CONCAT",
+		 field_type_strs[type], 2, field_type_strs[type2]);
+	return field_type_MAX;
+}
+
+static enum field_type
+check_hex(struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || type == FIELD_TYPE_VARBINARY)
+		return FIELD_TYPE_VARBINARY;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "HEX", "varbinary", 1,
+		 field_type_strs[type]);
+	return field_type_MAX;
+}
+
+static enum field_type
+check_unicode(const char *name, struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || type == FIELD_TYPE_STRING)
+		return FIELD_TYPE_INTEGER;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, name, "string", 1,
+		 field_type_strs[type]);
+	return field_type_MAX;
+}
+
+static enum field_type
+check_soundex(const char *name, struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || type == FIELD_TYPE_STRING)
+		return FIELD_TYPE_STRING;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, name, "string", 1,
+		 field_type_strs[type]);
 	return field_type_MAX;
 }
 
@@ -2025,27 +2122,35 @@ sql_func_result(struct Expr *expr)
 	case TK_ABS:
 	case TK_AVG:
 	case TK_SUM:
-		return check_abs(expr->x.pList);
+		return check_abs(expr->u.zToken, expr->x.pList);
 	case TK_TOTAL:
 		return check_total(expr->x.pList);
 	case TK_CHAR:
+		return check_char(expr->x.pList);
 	case TK_GROUP_CONCAT:
+		return check_group_concat(expr->x.pList);
 	case TK_HEX:
+		return check_hex(expr->x.pList);
+	case TK_CHAR_LEN:
+	case TK_UNICODE:
+		return check_unicode(expr->u.zToken, expr->x.pList);
 	case TK_LOWER:
+	case TK_UPPER:
+	case TK_SOUNDEX:
+		return check_soundex(expr->u.zToken, expr->x.pList);
+
+
+
+	case TK_LENGTH:
 	case TK_PRINTF:
 	case TK_QUOTE:
 	case TK_REPLACE:
-	case TK_SOUNDEX:
 	case TK_SUBSTR:
 	case TK_TRIM:
 	case TK_TYPEOF:
-	case TK_UNICODE:
-	case TK_UPPER:
 	case TK_VERSION:
 		return FIELD_TYPE_STRING;
-	case TK_CHAR_LEN:
 	case TK_COUNT:
-	case TK_LENGTH:
 	case TK_LIKE_KW:
 	case TK_POSITION:
 	case TK_RANDOM:

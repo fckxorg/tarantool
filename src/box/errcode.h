@@ -283,7 +283,7 @@ struct errcode_record {
 	/*228 */_(ER_SYNC_QUEUE_FOREIGN,	"The synchronous transaction queue belongs to other instance with id %u")\
 	/*226 */_(ER_UNABLE_TO_PROCESS_IN_STREAM, "Unable to process %s request in stream") \
 	/*227 */_(ER_UNABLE_TO_PROCESS_OUT_OF_STREAM, "Unable to process %s request out of stream") \
-	/*228 */_(ER_SQL_PARSER_TYPE_MISMATCH,	"Type mismatch: field type %s cannot be implicitly cast to %s") \
+	/*228 */_(ER_SQL_PARSER_FUNC_TYPE,	"Function %s expected %s as %d argument, got %s") \
 
 /*
  * !IMPORTANT! Please follow instructions at start of the file
