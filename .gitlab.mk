@@ -134,7 +134,7 @@ deploy: export LD_LIBRARY_PATH=/usr/local/lib
 deploy:
 	echo ${GPG_SECRET_KEY} | base64 -d | gpg --batch --import || true
 	./tools/update_repo.sh -o=${OS} -d=${DIST} \
-		-b="${LIVE_REPO_S3_DIR}/${BUCKET}" build
+		-b="${LIVE_REPO_S3_DIR}/tmp/${BUCKET}" build
 	case "${GITHUB_REF}" in                                       \
 	refs/tags/*)                                                  \
 		./tools/update_repo.sh -o=${OS} -d=${DIST}            \

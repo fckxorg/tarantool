@@ -19,7 +19,7 @@ aws="aws --endpoint-url ${AWS_S3_ENDPOINT_URL:-https://hb.bizmrg.com} s3"
 aws_cp_public="$aws cp --acl public-read"
 aws_sync_public="$aws sync --acl public-read"
 
-arch=$(rpm --eval '%{_arch}' || dpkg --print-architecture)
+arch=$(rpm --eval '%{_arch}')
 
 function get_os_dists {
     os=$1
@@ -120,6 +120,7 @@ EOF
            It will search and try to remove packages:
              tarantool_2.2.2.0.<hash>-1_all.deb
              tarantool_2.2.2.0.<hash>-1_amd64.deb
+             tarantool_2.2.2.0.<hash>-1_arm64.deb
              tarantool_2.2.2.0.<hash>-1.dsc
              tarantool_2.2.2.0.<hash>-1.debian.tar.xz
              tarantool_2.2.2.0.<hash>.orig.tar.xz
@@ -495,7 +496,7 @@ function remove_deb {
     update_deb_dists
 
     # remove all found file by the given pattern in options
-    for suffix in '-1_all.deb' '-1_amd64.deb' '-1.dsc' '-1.debian.tar.xz' '.orig.tar.xz' ; do
+    for suffix in '-1_all.deb' '-1_amd64.deb' '-1_arm64.deb' '-1.dsc' '-1.debian.tar.xz' '.orig.tar.xz' ; do
         file="$bucket_path/$poolpath/${remove}$suffix"
         echo "Searching to remove: $file"
         $aws ls "$file" || continue
@@ -560,10 +561,6 @@ EOF
         initiate_deb_metadata dists/$loop_dist/$component/binary-amd64/Packages
         for deb in $ws/$debdir/$loop_dist/$component/*/*/*.deb ; do
             [ -f $deb ] || continue
-            if [[ "$arch" != "x86_64" && \
-                  "$deb" != "_${arch}.deb" ]]; then
-              continue
-            fi
             updated_deb=0
             # regenerate DEB pack
             update_deb_packfile $deb deb $loop_dist
@@ -582,13 +579,12 @@ EOF
         done
 
         # 1(sources). use reprepro tool to generate Sources file
+        if [[ "$arch" != "x86_64" ]]; then
+              continue
+        fi
         initiate_deb_metadata dists/$loop_dist/$component/source/Sources
         for dsc in $ws/$debdir/$loop_dist/$component/*/*/*.dsc ; do
             [ -f $dsc ] || continue
-            if [[ "$arch" != "x86_64" && \
-                  "$deb" != "_${arch}.deb" ]]; then
-              continue
-            fi
             updated_dsc=0
             # regenerate DSC pack
             update_deb_packfile $dsc dsc $loop_dist
