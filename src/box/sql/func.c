@@ -2221,6 +2221,43 @@ check_least(const char *name, struct ExprList *list)
 	return result;
 }
 
+static enum field_type
+check_replace(struct ExprList *list)
+{
+	assert(list != NULL);
+	assert(list->nExpr == 1 || list->nExpr == 2);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (!is_null && !is_undefined && type != FIELD_TYPE_STRING) {
+		diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "REPLACE",
+			 "string", 1, field_type_strs[type]);
+		return field_type_MAX;
+	}
+
+	int op2 = list->a[0].pExpr->op;
+	enum field_type type2 = sql_expr_type(list->a[0].pExpr);
+	bool is_null2 = op2 == TK_NULL;
+	bool is_undefined2 = op2 == TK_VARIABLE || type2 == FIELD_TYPE_ANY;
+	if (!is_null2 && !is_undefined2 && type2 != FIELD_TYPE_STRING) {
+		diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "REPLACE",
+			 "string", 2, field_type_strs[type2]);
+		return field_type_MAX;
+	}
+
+	int op3 = list->a[0].pExpr->op;
+	enum field_type type3 = sql_expr_type(list->a[0].pExpr);
+	bool is_null3 = op3 == TK_NULL;
+	bool is_undefined3 = op3 == TK_VARIABLE || type3 == FIELD_TYPE_ANY;
+	if (!is_null3 && !is_undefined3 && type3 != FIELD_TYPE_STRING) {
+		diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "REPLACE",
+			 "string", 3, field_type_strs[type3]);
+		return field_type_MAX;
+	}
+	return FIELD_TYPE_STRING;
+}
+
 enum field_type
 sql_func_result(struct Expr *expr)
 {
@@ -2273,10 +2310,11 @@ sql_func_result(struct Expr *expr)
 	case TK_GREATEST:
 	case TK_LEAST:
 		return check_least(expr->u.zToken, expr->x.pList);
-
-
-
 	case TK_REPLACE:
+		return check_replace(expr->x.pList);
+
+
+
 	case TK_SUBSTR:
 	case TK_TRIM:
 		return FIELD_TYPE_STRING;
