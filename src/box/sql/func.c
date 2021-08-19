@@ -2192,6 +2192,35 @@ check_zeroblob(const char *name, struct ExprList *list)
 	return field_type_MAX;
 }
 
+static enum field_type
+check_least(const char *name, struct ExprList *list)
+{
+	uint32_t argc = list == NULL ? 0 : list->nExpr;
+	enum field_type result;
+	for (uint32_t i = 0; i < argc; ++i) {
+		int op = list->a[i].pExpr->op;
+		enum field_type type = sql_expr_type(list->a[i].pExpr);
+		bool is_null = op == TK_NULL;
+		bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+		if (is_null || is_undefined)
+			type = FIELD_TYPE_SCALAR;
+		if (type == FIELD_TYPE_MAP || type == FIELD_TYPE_ARRAY) {
+			diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, name,
+				 "one of scalar types", i + 1,
+				 field_type_strs[type]);
+			return field_type_MAX;
+		}
+		if (i == 0)
+			result = type;
+		if (result == type || result == FIELD_TYPE_SCALAR ||
+		    (result == FIELD_TYPE_NUMBER && sql_type_is_numeric(type)))
+			continue;
+		result = sql_type_is_numeric(type) ? FIELD_TYPE_NUMBER :
+			 FIELD_TYPE_SCALAR;
+	}
+	return result;
+}
+
 enum field_type
 sql_func_result(struct Expr *expr)
 {
@@ -2241,10 +2270,9 @@ sql_func_result(struct Expr *expr)
 	case TK_RANDOMBLOB:
 	case TK_ZEROBLOB:
 		return check_zeroblob(expr->u.zToken, expr->x.pList);
-
 	case TK_GREATEST:
 	case TK_LEAST:
-		return FIELD_TYPE_SCALAR;
+		return check_least(expr->u.zToken, expr->x.pList);
 
 
 
