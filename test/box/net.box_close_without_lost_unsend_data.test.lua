@@ -19,6 +19,7 @@ function connection_send_async_requests(count, addr)
     local space = conn.space.test
     for i = 1, count do space:replace({i}, {is_async = true}) end
     conn:close()
+    test_run:wait_cond(function () return get_current_connection_count() == 0 end)
 end;
 function stream_send_async_requests(count, addr)
     local conn = net_box.connect(addr)
@@ -28,6 +29,7 @@ function stream_send_async_requests(count, addr)
     for i = 1, count do space:replace({i}, {is_async = true}) end
     stream:commit({is_async = true})
     conn:close()
+    test_run:wait_cond(function () return get_current_connection_count() == 0 end)
 end;
 test_run:cmd("setopt delimiter ''");
 
@@ -37,19 +39,21 @@ test_run:switch("test")
 test_run:cmd("setopt delimiter ';'")
 function create_space_with_engine(engine)
     local s = box.schema.space.create('test', { engine = engine })
+    assert(s.engine == engine)
     local _ = s:create_index('primary')
     return s
 end;
-function check_requests_result_and_drop_space(space, count)
+function check_requests_result_and_drop_space(space, count, engine, msg)
+    print("CHECK !!! ", msg .. engine)
     local errinj = box.error.injection
-    test_run:wait_cond(function ()
-        return errinj.get('ERRINJ_IPROTO_STREAM_COUNT') == 0
-    end)
-    test_run:wait_cond(function ()
-        return errinj.get('ERRINJ_IPROTO_STREAM_MSG_COUNT') == 0
-    end)
+    assert(errinj.get('ERRINJ_IPROTO_STREAM_COUNT') == 0)
+    assert(errinj.get('ERRINJ_IPROTO_STREAM_MSG_COUNT') == 0)
+    assert(space.engine == engine)
     local rc = space:select()
     space:drop()
+    if #rc ~= count then
+    	print("RC COUNT ", #rc, count, msg .. engine)
+    end
     return (#rc == count)
 end;
 test_run:cmd("setopt delimiter ''");
@@ -62,24 +66,23 @@ s = create_space_with_engine("memtx")
 test_run:switch('default')
 connection_send_async_requests(net_msg_max - 1, server_addr)
 test_run:switch("test")
-assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 1))
+assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 1, "memtx", "CONN "))
 s = create_space_with_engine("vinyl")
 test_run:switch("default")
 connection_send_async_requests(net_msg_max - 1, server_addr)
 test_run:switch("test")
-assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 1))
+assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 1, "vinyl", "CONN "))
 s = create_space_with_engine("memtx")
 test_run:switch("default")
-stream_send_async_requests(net_msg_max - 1, server_addr)
+stream_send_async_requests(net_msg_max - 3, server_addr)
 test_run:switch("test")
-assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 1))
+assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 3, "memtx", "STREAM "))
 s = create_space_with_engine("vinyl")
 test_run:switch("default")
-stream_send_async_requests(net_msg_max - 1, server_addr)
+stream_send_async_requests(net_msg_max - 3, server_addr)
 test_run:switch("test")
-assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 1))
+assert(check_requests_result_and_drop_space(s, box.cfg.net_msg_max - 3, "vinyl", "STREAM "))
 test_run:switch("default")
-test_run:wait_cond(function () return get_current_connection_count() == 0 end)
 
 test_run:cmd("stop server test")
 test_run:cmd("cleanup server test")

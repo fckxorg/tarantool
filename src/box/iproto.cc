@@ -601,6 +601,12 @@ struct iproto_connection
 	char salt[IPROTO_SALT_SIZE];
 	/** Iproto connection thread */
 	struct iproto_thread *iproto_thread;
+
+	int n_requests;
+	int n_prequests;
+	bool disco;
+	int pr1;
+	int pr1_a;
 };
 
 #ifdef NDEBUG
@@ -841,6 +847,7 @@ iproto_connection_close(struct iproto_connection *con)
 		 * parsed data is processed.  It's important this
 		 * is done only once.
 		 */
+		fprintf(stderr, "PARCE SIZE %lu\n", con->parse_size);
 		con->p_ibuf->wpos -= con->parse_size;
 		mh_int_t node;
 		mh_foreach(con->streams, node) {
@@ -1111,6 +1118,7 @@ err_msgpack:
 			 */
 			cpipe_push_input(&con->iproto_thread->tx_pipe, &msg->base);
 			n_requests++;
+			con->n_requests++;
 		}
 
 		/* Request is parsed */
@@ -1237,6 +1245,7 @@ iproto_connection_on_input(ev_loop *loop, struct ev_io *watcher,
 			return;
 		}
 		if (nrd == 0) {                 /* EOF */
+			fprintf(stderr, "NUKK WAS READ\n");
 			iproto_connection_close(con);
 			return;
 		}
@@ -1251,6 +1260,7 @@ iproto_connection_on_input(ev_loop *loop, struct ev_io *watcher,
 		if (iproto_enqueue_batch(con, in) != 0)
 			diag_raise();
 	} catch (Exception *e) {
+		fprintf(stderr, "CATCH INPUT\n");
 		/* Best effort at sending the error message to the client. */
 		iproto_write_error(fd, e, ::schema_version, 0);
 		e->log();
@@ -1379,6 +1389,11 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 	con->parse_size = 0;
 	con->long_poll_count = 0;
 	con->session = NULL;
+	con->n_requests = 0;
+	con->n_prequests = 0;
+	con->disco = true;
+	con->pr1 = 0;
+	con->pr1_a = 0;
 	rlist_create(&con->in_stop_list);
 	/* It may be very awkward to allocate at close. */
 	cmsg_init(&con->destroy_msg, con->iproto_thread->destroy_route);
@@ -1403,6 +1418,7 @@ iproto_connection_delete(struct iproto_connection *con)
 	 * The output buffers must have been deleted
 	 * in tx thread.
 	 */
+	fprintf(stderr, "AFTER ALL %d %d %d %d\n", con->n_requests, con->n_prequests, con->pr1, con->pr1_a);
 	ibuf_destroy(&con->ibuf[0]);
 	ibuf_destroy(&con->ibuf[1]);
 	assert(con->obuf[0].pos == 0 &&
@@ -1610,6 +1626,7 @@ tx_process_rollback_on_disconnect(struct cmsg *m)
 			panic("failed to rollback transaction on disconnect");
 		stream->txn = NULL;
 	}
+	fprintf(stderr, "ROLLBACK ON DISCONNECT !!!!!\n");
 }
 
 static void
@@ -1631,6 +1648,7 @@ net_finish_rollback_on_disconnect(struct cmsg *m)
 static void
 tx_process_disconnect(struct cmsg *m)
 {
+	fprintf(stderr, "TX PROCESS DISCONNECT\n");
 	struct iproto_connection *con =
 		container_of(m, struct iproto_connection, disconnect_msg);
 	if (con->session != NULL) {
@@ -1640,6 +1658,7 @@ tx_process_disconnect(struct cmsg *m)
 			session_run_on_disconnect_triggers(con->session);
 		}
 	}
+	con->disco = true;
 }
 
 static void
@@ -1861,6 +1880,7 @@ error:
 static void
 tx_process_commit(struct cmsg *m)
 {
+	fprintf(stderr, "COMMIT\n");
 	struct iproto_msg *msg = tx_accept_msg(m);
 	struct obuf *out;
 
@@ -1874,8 +1894,11 @@ tx_process_commit(struct cmsg *m)
 	iproto_reply_ok(out, msg->header.sync, ::schema_version);
 	iproto_wpos_create(&msg->wpos, out);
 	tx_end_msg(msg);
+	fprintf(stderr, "COMMIT SUCCESS\n");
 	return;
 error:
+	fprintf(stderr, "COMMIT FAIL\n");
+	diag_log();
 	tx_reply_error(msg);
 	tx_end_msg(msg);
 }
@@ -1908,7 +1931,9 @@ tx_process1(struct cmsg *m)
 	struct iproto_msg *msg = tx_accept_msg(m);
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
-
+	msg->connection->pr1++;
+	if (msg->connection->disco)
+		msg->connection->pr1_a++;
 	struct tuple *tuple;
 	struct obuf_svp svp;
 	struct obuf *out;
@@ -1926,6 +1951,8 @@ tx_process1(struct cmsg *m)
 	tx_end_msg(msg);
 	return;
 error:
+	fprintf(stderr, "ERROR PROCESS1 %d\n", msg->connection->pr1);
+	diag_log();
 	tx_reply_error(msg);
 	tx_end_msg(msg);
 }
@@ -2313,6 +2340,7 @@ iproto_msg_finish_processing_in_stream(struct iproto_msg *msg)
 					   in_stream);
 		assert(next != NULL);
 		next->wpos = con->wpos;
+		con->n_requests++;
 		cpipe_push_input(&con->iproto_thread->tx_pipe, &next->base);
 		cpipe_flush_input(&con->iproto_thread->tx_pipe);
 	}
@@ -2325,6 +2353,7 @@ net_send_msg(struct cmsg *m)
 	struct iproto_connection *con = msg->connection;
 
 	iproto_msg_finish_processing_in_stream(msg);
+	con->n_prequests++;
 	if (msg->len != 0) {
 		/* Discard request (see iproto_enqueue_batch()). */
 		msg->p_ibuf->rpos += msg->len;
@@ -2422,6 +2451,7 @@ tx_process_connect(struct cmsg *m)
 		tx_reply_error(msg);
 		msg->close_connection = true;
 	}
+	con->disco = false;
 }
 
 /**
