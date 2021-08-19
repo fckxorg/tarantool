@@ -1241,6 +1241,11 @@ enum trim_side_mask {
 				 (X) == FIELD_TYPE_DECIMAL || \
 				 (X) == FIELD_TYPE_DOUBLE)
 
+#define is_arithmetic_type(X)  ((X) == FIELD_TYPE_INTEGER || \
+				(X) == FIELD_TYPE_UNSIGNED || \
+				(X) == FIELD_TYPE_DECIMAL || \
+				(X) == FIELD_TYPE_DOUBLE)
+
 /*
  * Additional bit values that can be ORed with an type without
  * changing the type.

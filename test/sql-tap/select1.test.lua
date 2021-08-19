@@ -515,7 +515,7 @@ test:do_catchsql_test(
         SELECT sum(a) FROM t3
     ]], {
         -- <select1-2.17.1>
-        1, "Type mismatch: can not convert string('abc') to integer, decimal or double"
+        1, "Type mismatch: field type string cannot be implicitly cast to integer, decimal or double"
         -- </select1-2.17.1>
     })
 
@@ -535,7 +535,7 @@ test:do_catchsql_test(
         SELECT SUM(LEAST(f1,f2)) FROM test1
     ]], {
         -- <select1-2.19>
-        0, {44}
+        1, "Type mismatch: field type scalar cannot be implicitly cast to integer, decimal or double"
         -- </select1-2.19>
     })
 
@@ -545,7 +545,7 @@ test:do_catchsql_test(
         SELECT SUM(min(f1)) FROM test1
     ]], {
         -- <select1-2.20>
-        1, "misuse of aggregate function MIN()"
+        1, "Type mismatch: field type scalar cannot be implicitly cast to integer, decimal or double"
         -- </select1-2.20>
     })
 

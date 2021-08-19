@@ -282,7 +282,8 @@ SELECT is_boolean('true');
 SELECT abs(a) FROM t0;
  | ---
  | - null
- | - 'Inconsistent types: expected number got boolean(FALSE)'
+ | - 'Type mismatch: field type boolean cannot be implicitly cast to integer, decimal
+ |   or double'
  | ...
 SELECT lower(a) FROM t0;
  | ---
@@ -345,7 +346,8 @@ SELECT typeof(a) FROM t0;
 SELECT AVG(a) FROM t0;
  | ---
  | - null
- | - 'Type mismatch: can not convert boolean(FALSE) to integer, decimal or double'
+ | - 'Type mismatch: field type boolean cannot be implicitly cast to integer, decimal
+ |   or double'
  | ...
 SELECT MIN(a) FROM t0;
  | ---
@@ -366,7 +368,8 @@ SELECT MAX(a) FROM t0;
 SELECT SUM(a) FROM t0;
  | ---
  | - null
- | - 'Type mismatch: can not convert boolean(FALSE) to integer, decimal or double'
+ | - 'Type mismatch: field type boolean cannot be implicitly cast to integer, decimal
+ |   or double'
  | ...
 SELECT COUNT(a) FROM t0;
  | ---
@@ -379,7 +382,8 @@ SELECT COUNT(a) FROM t0;
 SELECT TOTAL(a) FROM t0;
  | ---
  | - null
- | - 'Type mismatch: can not convert boolean(FALSE) to integer, decimal or double'
+ | - 'Type mismatch: field type boolean cannot be implicitly cast to integer, decimal
+ |   or double'
  | ...
 SELECT GROUP_CONCAT(a, ' +++ ') FROM t0;
  | ---

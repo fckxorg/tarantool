@@ -386,7 +386,7 @@ test:do_catchsql_test(
         SELECT abs(b) FROM t1 ORDER BY a
     ]], {
         -- <func-4.3>
-        0, {2, 1.2345678901234, 2}
+        1, "Type mismatch: field type number cannot be implicitly cast to integer, decimal or double"
         -- </func-4.3>
     })
 
@@ -396,7 +396,7 @@ test:do_catchsql_test(
         SELECT abs(c) FROM t1 ORDER BY a
     ]], {
         -- <func-4.4>
-        0, {3, 12345.6789, 5}
+        1, "Type mismatch: field type number cannot be implicitly cast to integer, decimal or double"
         -- </func-4.4>
     })
 
@@ -2891,7 +2891,7 @@ test:do_catchsql_test(
         SELECT SUM(X'FF')
     ]], {
         -- <func-76.4>
-        1, "Type mismatch: can not convert varbinary(x'FF') to integer, decimal or double"
+        1, "Type mismatch: field type varbinary cannot be implicitly cast to integer, decimal or double"
         -- </func-76.4>
     })
 

@@ -1985,14 +1985,49 @@ sql_func_flags(uint8_t id)
 }
 
 enum field_type
+check_abs(struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null)
+		return FIELD_TYPE_INTEGER;
+	if (is_undefined)
+		return FIELD_TYPE_DOUBLE;
+	if (is_arithmetic_type(type))
+		return type;
+	diag_set(ClientError, ER_SQL_PARSER_TYPE_MISMATCH,
+		 field_type_strs[type], "integer, decimal or double");
+	return field_type_MAX;
+}
+
+enum field_type
+check_total(struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || is_arithmetic_type(type))
+		return FIELD_TYPE_DOUBLE;
+	diag_set(ClientError, ER_SQL_PARSER_TYPE_MISMATCH,
+		 field_type_strs[type], "integer, decimal or double");
+	return field_type_MAX;
+}
+
+enum field_type
 sql_func_result(struct Expr *expr)
 {
 	switch(expr->func_id) {
 	case TK_ABS:
 	case TK_AVG:
 	case TK_SUM:
+		return check_abs(expr->x.pList);
 	case TK_TOTAL:
-		return FIELD_TYPE_NUMBER;
+		return check_total(expr->x.pList);
 	case TK_CHAR:
 	case TK_GROUP_CONCAT:
 	case TK_HEX:

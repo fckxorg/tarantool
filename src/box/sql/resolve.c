@@ -679,7 +679,10 @@ resolveExprStep(Walker * pWalker, Expr * pExpr)
 				pNC->ncFlags |= NC_AllowAgg;
 			}
 			pExpr->type = sql_func_result(pExpr);
-			assert(pExpr->type != field_type_MAX);
+			if (pExpr->type == field_type_MAX) {
+				pParse->is_aborted = true;
+				return WRC_Abort;
+			}
 			return WRC_Prune;
 		}
 	case TK_SELECT:

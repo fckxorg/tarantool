@@ -229,7 +229,7 @@ test:do_catchsql_test(
     [[
         SELECT ABS(u) from t2;
     ]], {
-        1, "Inconsistent types: expected number got uuid('11111111-1111-1111-1111-111111111111')"
+        1, "Type mismatch: field type uuid cannot be implicitly cast to integer, decimal or double"
     })
 
 test:do_catchsql_test(
@@ -237,7 +237,7 @@ test:do_catchsql_test(
     [[
         SELECT AVG(u) from t2;
     ]], {
-        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to integer, decimal or double"
+        1, "Type mismatch: field type uuid cannot be implicitly cast to integer, decimal or double"
     })
 
 test:do_execsql_test(
@@ -445,7 +445,7 @@ test:do_catchsql_test(
     [[
         SELECT SUM(u) from t2;
     ]], {
-        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to integer, decimal or double"
+        1, "Type mismatch: field type uuid cannot be implicitly cast to integer, decimal or double"
     })
 
 test:do_catchsql_test(
@@ -453,7 +453,7 @@ test:do_catchsql_test(
     [[
         SELECT TOTAL(u) from t2;
     ]], {
-        1, "Type mismatch: can not convert uuid('11111111-1111-1111-1111-111111111111') to integer, decimal or double"
+        1, "Type mismatch: field type uuid cannot be implicitly cast to integer, decimal or double"
     })
 
 test:do_execsql_test(
