@@ -2132,6 +2132,23 @@ check_length(struct ExprList *list)
 	return field_type_MAX;
 }
 
+static enum field_type
+check_minmax(const char *name, struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined)
+		return FIELD_TYPE_SCALAR;
+	if (type != FIELD_TYPE_MAP && type != FIELD_TYPE_ARRAY)
+		return type;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, name,
+		 "one of scalar types", 1, field_type_strs[type]);
+	return field_type_MAX;
+}
+
 enum field_type
 sql_func_result(struct Expr *expr)
 {
@@ -2164,6 +2181,9 @@ sql_func_result(struct Expr *expr)
 	case TK_RANDOM:
 	case TK_ROW_COUNT:
 		return FIELD_TYPE_INTEGER;
+	case TK_MAX:
+	case TK_MIN:
+		return check_minmax(expr->u.zToken, expr->x.pList);
 
 	case TK_QUOTE:
 	case TK_REPLACE:
@@ -2179,8 +2199,6 @@ sql_func_result(struct Expr *expr)
 	case TK_GREATEST:
 	case TK_IFNULL:
 	case TK_LEAST:
-	case TK_MAX:
-	case TK_MIN:
 	case TK_NULLIF:
 		return FIELD_TYPE_SCALAR;
 	case TK_LIKELIHOOD:
