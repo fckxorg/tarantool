@@ -65,6 +65,8 @@ sql_expr_type(struct Expr *pExpr)
 	case TK_COLUMN_REF:
 	case TK_TRIGGER:
 		assert(pExpr->iColumn >= 0);
+		if (pExpr->space_def == NULL)
+			return FIELD_TYPE_ANY;
 		return pExpr->space_def->fields[pExpr->iColumn].type;
 	case TK_SELECT_COLUMN:
 		assert(pExpr->pLeft->flags & EP_xIsSelect);

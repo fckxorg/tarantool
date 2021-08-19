@@ -2115,6 +2115,23 @@ check_soundex(const char *name, struct ExprList *list)
 	return field_type_MAX;
 }
 
+static enum field_type
+check_length(struct ExprList *list)
+{
+	assert(list != NULL && list->nExpr == 1);
+	int op = list->a[0].pExpr->op;
+	enum field_type type = sql_expr_type(list->a[0].pExpr);
+	bool is_null = op == TK_NULL;
+	bool is_undefined = op == TK_VARIABLE || type == FIELD_TYPE_ANY;
+	if (is_null || is_undefined || type == FIELD_TYPE_STRING)
+		return FIELD_TYPE_STRING;
+	if (type == FIELD_TYPE_VARBINARY)
+		return FIELD_TYPE_VARBINARY;
+	diag_set(ClientError, ER_SQL_PARSER_FUNC_TYPE, "LENGTH",
+		 "string or varbinary", 1, field_type_strs[type]);
+	return field_type_MAX;
+}
+
 enum field_type
 sql_func_result(struct Expr *expr)
 {
@@ -2138,24 +2155,25 @@ sql_func_result(struct Expr *expr)
 	case TK_UPPER:
 	case TK_SOUNDEX:
 		return check_soundex(expr->u.zToken, expr->x.pList);
-
-
-
 	case TK_LENGTH:
+		return check_length(expr->x.pList);
 	case TK_PRINTF:
+	case TK_VERSION:
+		return FIELD_TYPE_STRING;
+	case TK_COUNT:
+	case TK_RANDOM:
+	case TK_ROW_COUNT:
+		return FIELD_TYPE_INTEGER;
+
 	case TK_QUOTE:
 	case TK_REPLACE:
 	case TK_SUBSTR:
 	case TK_TRIM:
 	case TK_TYPEOF:
-	case TK_VERSION:
 		return FIELD_TYPE_STRING;
-	case TK_COUNT:
 	case TK_LIKE_KW:
 	case TK_POSITION:
-	case TK_RANDOM:
 	case TK_ROUND:
-	case TK_ROW_COUNT:
 		return FIELD_TYPE_INTEGER;
 	case TK_COALESCE:
 	case TK_GREATEST:
