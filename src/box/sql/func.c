@@ -1221,15 +1221,21 @@ hexFunc(sql_context * context, int argc, sql_value ** argv)
 	UNUSED_PARAMETER(argc);
 	pBlob = mem_as_bin(argv[0]);
 	n = mem_len_unsafe(argv[0]);
+	assert((argv[0]->flags & MEM_Zero) == 0 ||
+	       argv[0]->type == MEM_TYPE_BIN);
+	int zero_len = (argv[0]->flags & MEM_Zero) == 0 ? 0 : argv[0]->u.nZero;
 	assert(pBlob == mem_as_bin(argv[0]));	/* No encoding change */
 	z = zHex = contextMalloc(context, ((i64) n) * 2 + 1);
 	if (zHex) {
-		for (i = 0; i < n; i++, pBlob++) {
+		for (i = 0; i < n - zero_len; i++, pBlob++) {
 			unsigned char c = *pBlob;
 			*(z++) = hexdigits[(c >> 4) & 0xf];
 			*(z++) = hexdigits[c & 0xf];
 		}
-		*z = 0;
+		assert(i == n || (argv[0]->flags & MEM_Zero) != 0);
+		assert(n == zero_len + i);
+		memset(z, '0', 2 * zero_len);
+		z[2 * zero_len] = '\0';
 		sql_result_text(context, zHex, n * 2, sql_free);
 	}
 }
