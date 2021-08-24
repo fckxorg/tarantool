@@ -2901,6 +2901,17 @@ on_replace_dd_truncate(struct trigger * /* trigger */, void *event)
 	if (space_is_temporary(old_space) ||
 	    space_group_id(old_space) == GROUP_LOCAL) {
 		stmt->row->group_id = GROUP_LOCAL;
+		/*
+		 * In order to append a dummy NOP statement
+		 * to preserve the tx replication boundaries,
+		 * it is necessary that the condition
+		 * txn->n_local_rows > 0 must be true.
+		 * Therefore it is necessary to increase the
+		 * value of n_local_rows, because the checking
+		 * on the flag of GROUP_LOCAL will occurs
+		 * before it is set.
+		 */
+		++txn->n_local_rows;
 	}
 
 	try {
