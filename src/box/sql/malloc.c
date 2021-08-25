@@ -149,20 +149,6 @@ sql_sized_malloc(int nByte)
 }
 
 /*
- * Report the allocated size of a prior return from sql_sized_malloc()
- * or sql_sized_realloc().
- */
-static int
-sql_sized_sizeof(void *pPrior)
-{
-	sql_int64 *p;
-	assert(pPrior != 0);
-	p = (sql_int64 *) pPrior;
-	p--;
-	return (int)p[0];
-}
-
-/*
  * Like realloc().  Resize an allocation previously obtained from
  * sqlMemMalloc().
  *
@@ -223,16 +209,6 @@ isLookaside(sql * db, void *p)
 }
 
 /*
- * Return the size of a memory allocation previously obtained from
- * sqlMalloc() or sql_malloc().
- */
-int
-sqlMallocSize(void *p)
-{
-	return sql_sized_sizeof(p);
-}
-
-/*
  * Free memory that might be associated with a particular database
  * connection.
  */
@@ -270,7 +246,7 @@ sqlRealloc(void *pOld, u64 nBytes)
 		/* The 0x7ffff00 limit term is explained in comments on sqlMalloc() */
 		return 0;
 	}
-	nOld = sqlMallocSize(pOld);
+	nOld = sql_malloc_size(pOld);
 	nNew = ROUND8((int)nBytes);
 	if (nOld == nNew)
 		pNew = pOld;
