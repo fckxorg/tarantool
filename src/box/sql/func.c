@@ -37,6 +37,7 @@
 #include "sqlInt.h"
 #include "mem.h"
 #include "vdbeInt.h"
+#include "dateInt.h"
 #include "version.h"
 #include "coll/coll.h"
 #include "tarantoolInt.h"
@@ -1964,6 +1965,15 @@ static struct sql_func_dictionary dictionaries[] = {
 	{"UUID", 0, 1, 0, false, 0, NULL},
 	{"VERSION", 0, 0, 0, true, 0, NULL},
 	{"ZEROBLOB", 1, 1, 0, true, 0, NULL},
+
+	{"CURRENT_DATE", 0, 0, 0, false, 0, NULL},
+	{"CURRENT_TIME", 0, 0, 0, false, 0, NULL},
+	{"CURRENT_TIMESTAMP", 0, 0, 0, false, 0, NULL},
+	{"DATE", 0, SQL_MAX_FUNCTION_ARG, 0, false, 0, NULL},
+	{"DATETIME", 0, SQL_MAX_FUNCTION_ARG, 0, false, 0, NULL},
+	{"JULIANDAY", 0, SQL_MAX_FUNCTION_ARG, 0, false, 0, NULL},
+	{"STRFTIME", 0, SQL_MAX_FUNCTION_ARG, 0, false, 0, NULL},
+	{"TIME", 0, SQL_MAX_FUNCTION_ARG, 0, false, 0, NULL},
 };
 
 /**
@@ -2154,6 +2164,17 @@ static struct sql_func_definition definitions[] = {
 	{"VERSION", 0, {}, FIELD_TYPE_STRING, sql_func_version, NULL},
 	{"ZEROBLOB", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_VARBINARY,
 	 zeroblobFunc, NULL},
+	{"CURRENT_DATE", 0, {}, FIELD_TYPE_STRING, cdateFunc, NULL},
+	{"CURRENT_TIME", 0, {}, FIELD_TYPE_STRING, ctimeFunc, NULL},
+	{"CURRENT_TIMESTAMP", 0, {}, FIELD_TYPE_STRING, ctimestampFunc, NULL},
+	{"DATE", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, dateFunc, NULL},
+	{"DATETIME", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, datetimeFunc,
+	 NULL},
+	{"JULIANDAY", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_NUMBER, juliandayFunc,
+	 NULL},
+	{"STRFTIME", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, strftimeFunc,
+	 NULL},
+	{"TIME", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, timeFunc, NULL},
 };
 
 static struct sql_func_dictionary *
