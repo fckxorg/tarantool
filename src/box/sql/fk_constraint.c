@@ -844,11 +844,10 @@ fk_constraint_action_trigger(struct Parse *pParse, struct space_def *def,
 		where = NULL;
 	}
 
-	trigger = (struct sql_trigger *) sqlDbMallocZero(db,
-							     sizeof(*trigger));
+	trigger = sql_calloc(sizeof(*trigger));
 	if (trigger != NULL) {
 		size_t step_size = sizeof(TriggerStep) + name_len + 1;
-		trigger->step_list = sqlDbMallocZero(db, step_size);
+		trigger->step_list = sql_calloc(step_size);
 		step = trigger->step_list;
 		step->zTarget = (char *) &step[1];
 		memcpy((char *) step->zTarget, space_name, name_len);

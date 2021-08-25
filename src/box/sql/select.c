@@ -350,7 +350,7 @@ sqlSelectNew(Parse * pParse,	/* Parsing context */
 	standin.addrOpenEphm[1] = -1;
 	standin.nSelectRow = 0;
 	if (pSrc == 0)
-		pSrc = sqlDbMallocZero(db, sizeof(*pSrc));
+		pSrc = sql_calloc(sizeof(*pSrc));
 	standin.pSrc = pSrc;
 	standin.pWhere = pWhere;
 	standin.pGroupBy = pGroupBy;
@@ -4715,7 +4715,6 @@ convertCompoundSelectToSubquery(Walker * pWalker, Select * p)
 	int i;
 	Select *pNew;
 	Select *pX;
-	sql *db;
 	struct ExprList_item *a;
 	SrcList *pNewSrc;
 	Parse *pParse;
@@ -4741,8 +4740,7 @@ convertCompoundSelectToSubquery(Walker * pWalker, Select * p)
 	/* If we reach this point, that means the transformation is required. */
 
 	pParse = pWalker->pParse;
-	db = pParse->db;
-	pNew = sqlDbMallocZero(db, sizeof(*pNew));
+	pNew = sql_calloc(sizeof(*pNew));
 	if (pNew == 0)
 		return WRC_Abort;
 	memset(&dummy, 0, sizeof(dummy));

@@ -339,7 +339,7 @@ void *
 sql_malloc(uint32_t size);
 
 void *
-sql_malloc64(sql_uint64);
+sql_calloc(uint32_t size);
 
 void *
 sql_realloc64(void *, sql_uint64);
@@ -2493,7 +2493,6 @@ unsigned sqlStrlen30(const char *);
 
 void *sqlMalloc(u64);
 void *sqlMallocZero(u64);
-void *sqlDbMallocZero(sql *, u64);
 void *sqlDbMallocRaw(sql *, u64);
 void *sqlDbMallocRawNN(sql *, u64);
 char *sqlDbStrDup(sql *, const char *);

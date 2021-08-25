@@ -1573,7 +1573,7 @@ withDup(sql * db, With * p)
 	With *pRet = 0;
 	if (p) {
 		int nByte = sizeof(*p) + sizeof(p->a[0]) * (p->nCte - 1);
-		pRet = sqlDbMallocZero(db, nByte);
+		pRet = sql_calloc(nByte);
 		if (pRet) {
 			int i;
 			pRet->nCte = p->nCte;
@@ -2673,7 +2673,7 @@ sqlFindInIndex(Parse * pParse,	/* Parsing context */
  * string is eventually freed using sqlDbFree().
  */
 static enum field_type *
-expr_in_type(Parse *pParse, Expr *pExpr)
+expr_in_type(Expr *pExpr)
 {
 	Expr *pLeft = pExpr->pLeft;
 	int nVal = sqlExprVectorSize(pLeft);
@@ -2681,7 +2681,7 @@ expr_in_type(Parse *pParse, Expr *pExpr)
 
 	assert(pExpr->op == TK_IN);
 	uint32_t sz = (nVal + 1) * sizeof(enum field_type);
-	enum field_type *zRet = sqlDbMallocZero(pParse->db, sz);
+	enum field_type *zRet = sql_calloc(sz);
 	if (zRet) {
 		int i;
 		for (i = 0; i < nVal; i++) {
@@ -2808,8 +2808,7 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 					int i;
 					sqlSelectDestInit(&dest, SRT_Set,
 							      pExpr->iTable, reg_eph);
-					dest.dest_type =
-						expr_in_type(pParse, pExpr);
+					dest.dest_type = expr_in_type(pExpr);
 					assert((pExpr->iTable & 0x0000FFFF) ==
 					       pExpr->iTable);
 					pSelect->iLimit = 0;
@@ -3040,12 +3039,9 @@ sqlExprCodeIN(Parse * pParse,	/* Parsing and code generating context */
 	if (sqlExprCheckIN(pParse, pExpr))
 		return;
 	/* Type sequence for comparisons. */
-	enum field_type *zAff = expr_in_type(pParse, pExpr);
+	enum field_type *zAff = expr_in_type(pExpr);
 	nVector = sqlExprVectorSize(pExpr->pLeft);
-	aiMap =
-	    (int *)sqlDbMallocZero(pParse->db,
-				       nVector * (sizeof(int) + sizeof(char)) +
-				       1);
+	aiMap = sql_calloc(nVector * (sizeof(int) + sizeof(char)) + 1);
 	if (pParse->db->mallocFailed)
 		goto sqlExprCodeIN_oom_error;
 

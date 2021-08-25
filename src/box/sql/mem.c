@@ -3002,7 +3002,7 @@ sqlValueFree(sql_value * v)
 sql_value *
 sqlValueNew(sql * db)
 {
-	Mem *p = sqlDbMallocZero(db, sizeof(*p));
+	struct Mem *p = sql_calloc(sizeof(*p));
 	if (p) {
 		p->type = MEM_TYPE_NULL;
 		assert(p->flags == 0);

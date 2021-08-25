@@ -818,7 +818,7 @@ sqlVdbeSorterInit(sql * db,	/* Database connection (for malloc()) */
 	assert(pCsr->key_def != NULL);
 	assert(pCsr->eCurType == CURTYPE_SORTER);
 
-	pSorter = (VdbeSorter *) sqlDbMallocZero(db, sizeof(VdbeSorter));
+	pSorter = sql_calloc(sizeof(VdbeSorter));
 	pCsr->uc.pSorter = pSorter;
 	if (pSorter == 0)
 		return -1;

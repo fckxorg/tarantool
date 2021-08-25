@@ -91,6 +91,15 @@ sql_malloc(uint32_t size)
 	return (void *)new_buf;
 }
 
+void *
+sql_calloc(uint32_t size)
+{
+	char *buf = sql_malloc(size);
+	if (buf != NULL)
+		memset(buf, 0, size);
+	return (void *)buf;
+}
+
 void
 sql_free(void *ptr)
 {
@@ -287,21 +296,6 @@ sqlMallocZero(u64 n)
 	if (p) {
 		memset(p, 0, (size_t) n);
 	}
-	return p;
-}
-
-/*
- * Allocate and zero memory.  If the allocation fails, make
- * the mallocFailed flag in the connection pointer.
- */
-void *
-sqlDbMallocZero(sql * db, u64 n)
-{
-	void *p;
-	testcase(db == 0);
-	p = sqlDbMallocRaw(db, n);
-	if (p)
-		memset(p, 0, (size_t) n);
 	return p;
 }
 

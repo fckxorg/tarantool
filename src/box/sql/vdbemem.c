@@ -80,8 +80,7 @@ valueNew(sql * db, struct ValueNewStat4Ctx *p)
 
 			int nByte = sizeof(Mem) * part_count +
 				    ROUND8(sizeof(UnpackedRecord));
-			pRec = (UnpackedRecord *) sqlDbMallocZero(db,
-								      nByte);
+			pRec = sql_calloc(nByte);
 			if (pRec == NULL)
 				return NULL;
 			pRec->key_def = key_def_dup(idx->key_def);
@@ -155,10 +154,7 @@ valueFromFunction(sql * db,	/* The database connection */
 		return 0;
 
 	if (pList) {
-		apVal =
-		    (sql_value **) sqlDbMallocZero(db,
-							   sizeof(apVal[0]) *
-							   nVal);
+		apVal = sizeof(apVal[0]) * nVal);
 		if (apVal == 0) {
 			rc = -1;
 			goto value_from_function_out;

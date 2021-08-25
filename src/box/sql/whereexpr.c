@@ -574,7 +574,7 @@ exprAnalyzeOrTerm(SrcList * pSrc,	/* the FROM clause */
 	assert((pTerm->wtFlags & (TERM_DYNAMIC | TERM_ORINFO | TERM_ANDINFO)) ==
 	       0);
 	assert(pExpr->op == TK_OR);
-	pTerm->u.pOrInfo = pOrInfo = sqlDbMallocZero(db, sizeof(*pOrInfo));
+	pTerm->u.pOrInfo = pOrInfo = sql_calloc(sizeof(*pOrInfo));
 	if (pOrInfo == 0)
 		return;
 	pTerm->wtFlags |= TERM_ORINFO;

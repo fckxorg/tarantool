@@ -3060,7 +3060,7 @@ sql_id_list_append(struct sql *db, struct IdList *list,
 		   struct Token *name_token)
 {
 	if (list == NULL &&
-	    (list = sqlDbMallocZero(db, sizeof(*list))) == NULL) {
+	    (list = sql_calloc(sizeof(*list))) == NULL) {
 		diag_set(OutOfMemory, sizeof(*list), "sqlDbMallocZero", "list");
 		return NULL;
 	}
@@ -3488,7 +3488,7 @@ sqlWithAdd(Parse * pParse,	/* Parsing context */
 		    sizeof(*pWith) + (sizeof(pWith->a[1]) * pWith->nCte);
 		pNew = sqlDbRealloc(db, pWith, nByte);
 	} else {
-		pNew = sqlDbMallocZero(db, sizeof(*pWith));
+		pNew = sql_calloc(sizeof(*pWith));
 	}
 	assert((pNew != NULL && name != NULL) || db->mallocFailed);
 

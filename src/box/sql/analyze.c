@@ -300,7 +300,7 @@ statInit(sql_context * context, int argc, sql_value ** argv)
 	    + sizeof(Stat4Sample) * (nCol + 1 + mxSample)	/* Stat4Accum.aBest[], a[] */
 	    + sizeof(tRowcnt) * 3 * nColUp * (nCol + 1 + mxSample);
 	db = sql_context_db_handle(context);
-	p = sqlDbMallocZero(db, n);
+	p = sql_calloc(n);
 	if (p == 0) {
 		context->is_aborted = true;
 		return;

@@ -92,8 +92,7 @@ sql_exec(sql * db,	/* The database on which the SQL executes */
 			/* Invoke the callback function if required */
 			if (xCallback != NULL && rc == SQL_ROW) {
 				if (!callbackIsInit) {
-					azCols =
-					    sqlDbMallocZero(db,
+					azCols = sql_calloc(
 								2 * nCol *
 								sizeof(const
 								       char *) +
