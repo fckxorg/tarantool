@@ -647,7 +647,7 @@ statGet(sql_context * context, int argc, sql_value ** argv)
 		char *z;
 		int i;
 
-		char *zRet = sqlMallocZero((p->nKeyCol + 1) * 25);
+		char *zRet = sql_calloc((p->nKeyCol + 1) * 25);
 		if (zRet == 0) {
 			context->is_aborted = true;
 			return;
@@ -693,7 +693,7 @@ statGet(sql_context * context, int argc, sql_value ** argv)
 		}
 	}
 
-	char *zRet = sqlMallocZero(p->nCol * 25);
+	char *zRet = sql_calloc(p->nCol * 25);
 	if (zRet == 0) {
 		context->is_aborted = true;
 	} else {

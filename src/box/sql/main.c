@@ -374,7 +374,7 @@ sql_init_db(sql **out_db)
 		return -1;
 
 	/* Allocate the sql data structure */
-	db = sqlMallocZero(sizeof(sql));
+	db = calloc(1, sizeof(sql));
 	if (db == NULL) {
 		*out_db = NULL;
 		return -1;
@@ -391,7 +391,7 @@ sql_init_db(sql **out_db)
 
 	db->magic = SQL_MAGIC_OPEN;
 	if (db->mallocFailed) {
-		sql_free(db);
+		free(db);
 		*out_db = NULL;
 		return -1;
 	}
