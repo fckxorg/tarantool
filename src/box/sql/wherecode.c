@@ -1103,10 +1103,8 @@ sqlWhereCodeOneLoopStart(WhereInfo * pWInfo,	/* Complete information about the W
 			int nNotReady;	/* The number of notReady tables */
 			struct SrcList_item *origSrc;	/* Original list of tables */
 			nNotReady = pWInfo->nLevel - iLevel - 1;
-			pOrTab = sqlStackAllocRaw(db,
-						      sizeof(*pOrTab) +
-						      nNotReady *
-						      sizeof(pOrTab->a[0]));
+			pOrTab = sql_malloc(sizeof(*pOrTab) +
+					    nNotReady * sizeof(pOrTab->a[0]));
 			if (pOrTab == 0)
 				return notReady;
 			pOrTab->nAlloc = (u8) (nNotReady + 1);

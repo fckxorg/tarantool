@@ -950,7 +950,7 @@ static SQL_NOINLINE char *
 strAccumFinishRealloc(StrAccum * p)
 {
 	assert(p->mxAlloc > 0 && !isMalloced(p));
-	p->zText = sqlDbMallocRaw(p->db, p->nChar + 1);
+	p->zText = sql_malloc(p->nChar + 1);
 	if (p->zText) {
 		memcpy(p->zText, p->zBase, p->nChar + 1);
 		p->printfFlags |= SQL_PRINTF_MALLOCED;

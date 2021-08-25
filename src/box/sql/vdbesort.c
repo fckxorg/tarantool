@@ -1049,8 +1049,7 @@ vdbeSortAllocUnpacked(SortSubtask * pTask)
 {
 	if (pTask->pUnpacked == 0) {
 		pTask->pUnpacked =
-			sqlVdbeAllocUnpackedRecord(pTask->pSorter->db,
-						       pTask->pSorter->key_def);
+			sqlVdbeAllocUnpackedRecord(pTask->pSorter->key_def);
 		if (pTask->pUnpacked == 0)
 			return -1;
 		pTask->pUnpacked->nField = pTask->pSorter->key_def->part_count;
@@ -2198,7 +2197,7 @@ sqlVdbeSorterCompare(const VdbeCursor * pCsr,	/* Sorter cursor */
 	r2 = pSorter->pUnpacked;
 	if (r2 == 0) {
 		r2 = pSorter->pUnpacked =
-			sqlVdbeAllocUnpackedRecord(pSorter->db,  pCsr->key_def);
+			sqlVdbeAllocUnpackedRecord(pCsr->key_def);
 		if (r2 == 0)
 			return -1;
 		r2->nField = nKeyCol;

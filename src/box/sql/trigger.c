@@ -205,7 +205,7 @@ sql_trigger_finish(struct Parse *parse, struct TriggerStep *step_list,
 		uint32_t opts_buff_sz = mp_sizeof_map(1) +
 					mp_sizeof_str(sql_len) +
 					mp_sizeof_str(sql_str_len);
-		char *opts_buff = (char *) sqlDbMallocRaw(db, opts_buff_sz);
+		char *opts_buff = sql_malloc(opts_buff_sz);
 		if (opts_buff == NULL)
 			goto cleanup;
 

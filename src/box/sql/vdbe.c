@@ -2780,7 +2780,7 @@ case OP_Found: {        /* jump, in3 */
 		pIdxKey = &r;
 		pFree = 0;
 	} else {
-		pFree = pIdxKey = sqlVdbeAllocUnpackedRecord(db, pC->key_def);
+		pFree = pIdxKey = sqlVdbeAllocUnpackedRecord(pC->key_def);
 		if (pIdxKey==0) goto no_mem;
 		assert(mem_is_bin(pIn3));
 		(void)ExpandBlob(pIn3);

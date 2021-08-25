@@ -436,7 +436,7 @@ sqlUpdate(Parse * pParse,		/* The parser context */
 
 			/* Prepare array of changed fields. */
 			uint32_t upd_cols_sz = upd_cols_cnt * sizeof(uint32_t);
-			uint32_t *upd_cols = sqlDbMallocRaw(db, upd_cols_sz);
+			uint32_t *upd_cols = sql_malloc(upd_cols_sz);
 			if (upd_cols == NULL)
 				goto update_cleanup;
 			upd_cols_cnt = 0;

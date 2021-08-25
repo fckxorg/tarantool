@@ -277,8 +277,8 @@ void sqlVdbeRecordUnpackMsgpack(struct key_def *key_def,
 
 int sqlVdbeRecordCompare(struct sql *db, int key_count,
 			     const void *key1, UnpackedRecord *key2);
-UnpackedRecord *sqlVdbeAllocUnpackedRecord(struct sql *,
-					       struct key_def *);
+struct UnpackedRecord *
+sqlVdbeAllocUnpackedRecord(struct key_def *);
 void sqlVdbeLinkSubProgram(Vdbe *, SubProgram *);
 
 /* Use SQL_ENABLE_COMMENTS to enable generation of extra comments on
