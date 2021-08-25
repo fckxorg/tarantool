@@ -1226,7 +1226,7 @@ case OP_BuiltinFunction0: {
 	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
 	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
 	assert(pOp->p3<pOp->p2 || pOp->p3>=pOp->p2+n);
-	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
+	pCtx = sql_malloc(sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
 	if (pCtx==0) goto no_mem;
 	pCtx->pOut = 0;
 	pCtx->func = pOp->p4.func;
@@ -4221,7 +4221,7 @@ case OP_AggStep0: {
 	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
 	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
 	assert(pOp->p3<pOp->p2 || pOp->p3>=pOp->p2+n);
-	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
+	pCtx = sql_malloc(sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
 	if (pCtx==0) goto no_mem;
 	pCtx->pMem = 0;
 	pCtx->func = pOp->p4.func;

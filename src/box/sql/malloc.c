@@ -36,6 +36,73 @@
 #include "sqlInt.h"
 #include <stdarg.h>
 
+static void *
+lookaside_alloc(uint32_t size)
+{
+	struct Lookaside *pool = &sql_get()->lookaside;
+	if (pool->bDisable != 0 || size > pool->sz || pool->pFree == NULL)
+		return NULL;
+	struct LookasideSlot *buf = pool->pFree;
+	pool->pFree = buf->pNext;
+	pool->nOut++;
+	if (pool->nOut > pool->mxOut)
+		pool->mxOut = pool->nOut;
+	return (void *)buf;
+}
+
+static void
+lookaside_free(void *ptr)
+{
+	struct Lookaside *pool = &sql_get()->lookaside;
+	struct LookasideSlot *buf = (struct LookasideSlot *)ptr;
+	buf->pNext = pool->pFree;
+	pool->pFree = buf;
+	pool->nOut--;
+}
+
+static int
+is_lookaside(void *ptr)
+{
+	struct sql *db = sql_get();
+	return SQL_WITHIN(ptr, db->lookaside.pStart, db->lookaside.pEnd);
+}
+
+void *
+sql_malloc(uint32_t size)
+{
+	if (size == 0 || size >= 0x7fffffff){
+		sql_get()->mallocFailed = 1;
+		diag_set(ClientError, ER_SQL_EXECUTE,
+			 tt_sprintf("Cannot allocate %d bytes", size));
+		return NULL;
+	}
+	void *buf = lookaside_alloc(size);
+	if (buf != NULL)
+		return buf;
+	uint32_t new_size = ROUND8(size);
+	int64_t *new_buf = malloc(new_size + 8);
+	if (new_buf == NULL) {
+		sql_get()->mallocFailed = 1;
+		diag_set(OutOfMemory, size, "malloc", "new_buf");
+		return NULL;
+	}
+	new_buf[0] = size;
+	++new_buf;
+	return (void *)new_buf;
+}
+
+void
+sql_free(void *ptr)
+{
+	if (ptr == NULL)
+		return;
+	if (is_lookaside(ptr))
+		lookaside_free(ptr);
+	int64_t *buf = ptr;
+	--buf;
+	free(buf);
+}
+
 /*
  * Like malloc(), but remember the size of the allocation
  * so that we can find it later using sqlMemSize().
@@ -126,17 +193,6 @@ sqlMalloc(u64 n)
 	return p;
 }
 
-/*
- * This version of the memory allocation is for use by the application.
- * First make sure the memory subsystem is initialized, then do the
- * allocation.
- */
-void *
-sql_malloc(int n)
-{
-	return n <= 0 ? 0 : sqlMalloc(n);
-}
-
 void *
 sql_malloc64(sql_uint64 n)
 {
@@ -170,19 +226,6 @@ sqlDbMallocSize(sql * db, void *p)
 		return sql_sized_sizeof(p);
 	else
 		return db->lookaside.sz;
-}
-
-/*
- * Free memory previously obtained from sqlMalloc().
- */
-void
-sql_free(void *p)
-{
-	if (p == NULL)
-		return;
-	sql_int64 *raw_p = (sql_int64 *) p;
-	raw_p--;
-	free(raw_p);
 }
 
 /*

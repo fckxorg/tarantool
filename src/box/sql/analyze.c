@@ -207,7 +207,7 @@ sampleSetKey(sql * db, Stat4Sample * p, int n, const u8 * pData)
 	assert(db != 0);
 	if (p->nKey)
 		sqlDbFree(db, p->aKey);
-	p->aKey = sqlDbMallocRawNN(db, n);
+	p->aKey = sql_malloc(n);
 	if (p->aKey) {
 		p->nKey = n;
 		memcpy(p->aKey, pData, n);

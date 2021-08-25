@@ -297,7 +297,6 @@ fk_constraint_lookup_parent(struct Parse *parse_context, struct space *parent,
  * Build an expression that refers to a memory register
  * corresponding to @a column of given space.
  *
- * @param db SQL context.
  * @param def Definition of space whose content starts from
  *        @a reg_base register.
  * @param reg_base Index of a first element in an array of
@@ -308,10 +307,9 @@ fk_constraint_lookup_parent(struct Parse *parse_context, struct space *parent,
  * @retval NULL Error. A diag message is set.
  */
 static struct Expr *
-sql_expr_new_register(struct sql *db, struct space_def *def, int reg_base,
-		      uint32_t column)
+sql_expr_new_register(struct space_def *def, int reg_base, uint32_t column)
 {
-	struct Expr *expr = sql_expr_new_anon(db, TK_REGISTER);
+	struct Expr *expr = sql_expr_new_anon(TK_REGISTER);
 	if (expr == NULL)
 		return NULL;
 	expr->iTable = reg_base + column + 1;
@@ -322,7 +320,7 @@ sql_expr_new_register(struct sql *db, struct space_def *def, int reg_base,
 /**
  * Return an Expr object that refers to column of space_def which
  * has cursor cursor.
- * @param db The database connection.
+ *
  * @param def space definition.
  * @param cursor The open cursor on the table.
  * @param column The column that is wanted.
@@ -330,10 +328,9 @@ sql_expr_new_register(struct sql *db, struct space_def *def, int reg_base,
  * @retval NULL on error.
  */
 static struct Expr *
-sql_expr_new_column_by_cursor(struct sql *db, struct space_def *def,
-			      int cursor, int column)
+sql_expr_new_column_by_cursor(struct space_def *def, int cursor, int column)
 {
-	struct Expr *expr = sql_expr_new_anon(db, TK_COLUMN_REF);
+	struct Expr *expr = sql_expr_new_anon(TK_COLUMN_REF);
 	if (expr == NULL)
 		return NULL;
 	expr->space_def = def;
@@ -419,10 +416,10 @@ fk_constraint_scan_children(struct Parse *parser, struct SrcList *src,
 	for (uint32_t i = 0; i < fk_def->field_count; i++) {
 		uint32_t fieldno = fk_def->links[i].parent_field;
 		struct Expr *pexpr =
-			sql_expr_new_register(db, def, reg_data, fieldno);
+			sql_expr_new_register(def, reg_data, fieldno);
 		fieldno = fk_def->links[i].child_field;
 		const char *field_name = child_space->def->fields[fieldno].name;
-		struct Expr *chexpr = sql_expr_new_named(db, TK_ID, field_name);
+		struct Expr *chexpr = sql_expr_new_named(TK_ID, field_name);
 		struct Expr *eq = sqlPExpr(parser, TK_EQ, pexpr, chexpr);
 		where = sql_and_expr_new(db, where, eq);
 		if (where == NULL || chexpr == NULL || pexpr == NULL)
@@ -442,10 +439,10 @@ fk_constraint_scan_children(struct Parse *parser, struct SrcList *src,
 		struct Expr *expr = NULL, *pexpr, *chexpr, *eq;
 		for (uint32_t i = 0; i < fk_def->field_count; i++) {
 			uint32_t fieldno = fk_def->links[i].parent_field;
-			pexpr = sql_expr_new_register(db, def, reg_data,
+			pexpr = sql_expr_new_register(def, reg_data,
 						      fieldno);
 			int cursor = src->a[0].iCursor;
-			chexpr = sql_expr_new_column_by_cursor(db, def, cursor,
+			chexpr = sql_expr_new_column_by_cursor(def, cursor,
 							       fieldno);
 			eq = sqlPExpr(parser, TK_EQ, pexpr, chexpr);
 			expr = sql_and_expr_new(db, expr, eq);
@@ -675,8 +672,8 @@ static inline struct Expr *
 sql_expr_new_2part_id(struct Parse *parser, const struct Token *main,
 		      const struct Token *sub)
 {
-	struct Expr *emain = sql_expr_new(parser->db, TK_ID, main);
-	struct Expr *esub = sql_expr_new(parser->db, TK_ID, sub);
+	struct Expr *emain = sql_expr_new(TK_ID, main);
+	struct Expr *esub = sql_expr_new(TK_ID, sub);
 	if (emain == NULL || esub == NULL)
 		parser->is_aborted = true;
 	return sqlPExpr(parser, TK_DOT, emain, esub);
@@ -766,7 +763,7 @@ fk_constraint_action_trigger(struct Parse *pParse, struct space_def *def,
 		 */
 		struct Expr *new, *old =
 			sql_expr_new_2part_id(pParse, &t_old, &t_to_col);
-		struct Expr *from = sql_expr_new(db, TK_ID, &t_from_col);
+		struct Expr *from = sql_expr_new(TK_ID, &t_from_col);
 		struct Expr *eq = sqlPExpr(pParse, TK_EQ, old, from);
 		where = sql_and_expr_new(db, where, eq);
 		if (where == NULL || from == NULL)
@@ -816,7 +813,7 @@ fk_constraint_action_trigger(struct Parse *pParse, struct space_def *def,
 				   d != NULL) {
 				new = sqlExprDup(db, d, 0);
 			} else {
-				new = sql_expr_new_anon(db, TK_NULL);
+				new = sql_expr_new_anon(TK_NULL);
 				if (new == NULL)
 					pParse->is_aborted = true;
 			}
@@ -832,7 +829,7 @@ fk_constraint_action_trigger(struct Parse *pParse, struct space_def *def,
 		struct Token err;
 		err.z = space_name;
 		err.n = name_len;
-		struct Expr *r = sql_expr_new_named(db, TK_RAISE, "FOREIGN "\
+		struct Expr *r = sql_expr_new_named(TK_RAISE, "FOREIGN "\
 						    "KEY constraint failed");
 		if (r == NULL)
 			pParse->is_aborted = true;

@@ -94,9 +94,7 @@ whereClauseInsert(WhereClause * pWC, Expr * p, u16 wtFlags)
 	if (pWC->nTerm >= pWC->nSlot) {
 		WhereTerm *pOld = pWC->a;
 		sql *db = pWC->pWInfo->pParse->db;
-		pWC->a =
-		    sqlDbMallocRawNN(db,
-					 sizeof(pWC->a[0]) * pWC->nSlot * 2);
+		pWC->a = sql_malloc(sizeof(pWC->a[0]) * pWC->nSlot * 2);
 		if (pWC->a == 0) {
 			if (wtFlags & TERM_DYNAMIC) {
 				sql_expr_delete(db, p, false);
@@ -267,7 +265,6 @@ like_optimization_is_valid(Parse *pParse, Expr *pExpr, Expr **ppPrefix,
 	/* Number of non-wildcard prefix characters. */
 	int cnt;
 	/* Database connection. */
-	sql *db = pParse->db;
 	sql_value *pVal = 0;
 	/* Opcode of pRight. */
 	int op;
@@ -327,7 +324,7 @@ like_optimization_is_valid(Parse *pParse, Expr *pExpr, Expr **ppPrefix,
 			Expr *pPrefix;
 			*pisComplete = c == MATCH_ALL_WILDCARD &&
 				       z[cnt + 1] == 0;
-			pPrefix = sql_expr_new_named(db, TK_STRING, z);
+			pPrefix = sql_expr_new_named(TK_STRING, z);
 			if (pPrefix == NULL)
 				pParse->is_aborted = true;
 			else
@@ -602,7 +599,7 @@ exprAnalyzeOrTerm(SrcList * pSrc,	/* the FROM clause */
 			assert((pOrTerm->
 				wtFlags & (TERM_ANDINFO | TERM_ORINFO)) == 0);
 			chngToIN = 0;
-			pAndInfo = sqlDbMallocRawNN(db, sizeof(*pAndInfo));
+			pAndInfo = sql_malloc(sizeof(*pAndInfo));
 			if (pAndInfo) {
 				WhereClause *pAndWC;
 				WhereTerm *pAndTerm;
@@ -1278,7 +1275,7 @@ exprAnalyze(SrcList * pSrc,	/* the FROM clause */
 		Expr *pLeft = pExpr->pLeft;
 		int idxNew;
 		WhereTerm *pNewTerm;
-		struct Expr *expr = sql_expr_new_anon(db, TK_NULL);
+		struct Expr *expr = sql_expr_new_anon(TK_NULL);
 		if (expr == NULL)
 			pParse->is_aborted = true;
 		pNewExpr = sqlPExpr(pParse, TK_GT, sqlExprDup(db, pLeft, 0),
@@ -1475,7 +1472,7 @@ sqlWhereTabFuncArgs(Parse * pParse,	/* Parsing context */
 		 * unused.
 		 */
 		assert(k < (int)space_def->field_count);
-		pColRef = sql_expr_new_anon(pParse->db, TK_COLUMN_REF);
+		pColRef = sql_expr_new_anon(TK_COLUMN_REF);
 		if (pColRef == NULL) {
 			pParse->is_aborted = true;
 			return;

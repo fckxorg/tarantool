@@ -1102,7 +1102,7 @@ strftimeFunc(sql_context * context, int argc, sql_value ** argv)
 		context->is_aborted = true;
 		return;
 	} else {
-		z = sqlDbMallocRawNN(db, (int)n);
+		z = sql_malloc(n);
 		if (z == 0) {
 			context->is_aborted = true;
 			return;

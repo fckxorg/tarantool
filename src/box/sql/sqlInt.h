@@ -336,7 +336,7 @@ enum sql_ret_code {
 };
 
 void *
-sql_malloc(int);
+sql_malloc(uint32_t size);
 
 void *
 sql_malloc64(sql_uint64);
@@ -345,7 +345,7 @@ void *
 sql_realloc64(void *, sql_uint64);
 
 void
-sql_free(void *);
+sql_free(void *ptr);
 
 int
 sql_stricmp(const char *, const char *);
@@ -2645,7 +2645,7 @@ void sqlClearTempRegCache(Parse *);
  * @retval NULL Otherwise. The diag message is set.
  */
 struct Expr *
-sql_expr_new(struct sql *db, int op, const struct Token *token);
+sql_expr_new(int op, const struct Token *token);
 
 /**
  * The same as @sa sql_expr_new, but normalizes name, stored in
@@ -2659,11 +2659,11 @@ sql_expr_new_dequoted(struct sql *db, int op, const struct Token *token);
  * Token. Just sugar to do not touch tokens in many places.
  */
 static inline struct Expr *
-sql_expr_new_named(struct sql *db, int op, const char *name)
+sql_expr_new_named(int op, const char *name)
 {
 	struct Token name_token;
 	sqlTokenInit(&name_token, (char *)name);
-	return sql_expr_new(db, op, &name_token);
+	return sql_expr_new(op, &name_token);
 }
 
 /**
@@ -2671,9 +2671,9 @@ sql_expr_new_named(struct sql *db, int op, const char *name)
  * name.
  */
 static inline struct Expr *
-sql_expr_new_anon(struct sql *db, int op)
+sql_expr_new_anon(int op)
 {
-	return sql_expr_new_named(db, op, NULL);
+	return sql_expr_new_named(op, NULL);
 }
 
 void sqlExprAttachSubtrees(sql *, Expr *, Expr *, Expr *);
@@ -2943,12 +2943,11 @@ sql_src_list_enlarge(struct sql *db, struct SrcList *src_list, int new_slots,
 /**
  * Allocate a new empty SrcList object.
  *
- * @param db The database connection.
  * @retval Not NULL List pointer on success.
  * @retval NULL Otherwise. The diag message is set.
  */
 struct SrcList *
-sql_src_list_new(struct sql *db);
+sql_src_list_new();
 
 /**
  * Append a new table name to the given list. Create a new
@@ -3844,7 +3843,7 @@ field_type_sequence_dup(struct Parse *parse, enum field_type *types,
 int
 sql_atoi64(const char *z, int64_t *val, bool *is_neg, int length);
 
-void *sqlHexToBlob(sql *, const char *z, int n);
+void *sqlHexToBlob(const char *z, int n);
 u8 sqlHexToInt(int h);
 
 /**
@@ -4140,7 +4139,6 @@ void sqlSelectDestInit(SelectDest *, int, int, int);
  * Create an expression to load @a column from datasource
  * @a src_idx in @a src_list.
  *
- * @param db The database connection.
  * @param src_list The source list described with FROM clause.
  * @param src_idx The resource index to use in src_list.
  * @param column The column index.
@@ -4148,8 +4146,7 @@ void sqlSelectDestInit(SelectDest *, int, int, int);
  * @retval NULL Error. A diag message is set.
  */
 struct Expr *
-sql_expr_new_column(struct sql *db, struct SrcList *src_list, int src_idx,
-		    int column);
+sql_expr_new_column(struct SrcList *src_list, int src_idx, int column);
 
 int sqlExprCheckIN(Parse *, Expr *);
 

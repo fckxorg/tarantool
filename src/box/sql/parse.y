@@ -621,7 +621,7 @@ selcollist(A) ::= sclp(A) expr(X) as(Y).     {
    sqlExprListSetSpan(pParse,A,&X);
 }
 selcollist(A) ::= sclp(A) STAR. {
-  struct Expr *p = sql_expr_new_anon(pParse->db, TK_ASTERISK);
+  struct Expr *p = sql_expr_new_anon(TK_ASTERISK);
   if (p == NULL) {
     pParse->is_aborted = true;
     return;
@@ -978,7 +978,7 @@ idlist(A) ::= nm(Y). {
   static void spanExpr(ExprSpan *pOut, Parse *pParse, int op, Token t){
     struct Expr *p = NULL;
     int name_sz = t.n + 1;
-    p = sqlDbMallocRawNN(pParse->db, sizeof(Expr) + name_sz);
+    p = sql_malloc(sizeof(Expr) + name_sz);
     if( p ){
       memset(p, 0, sizeof(Expr));
       switch (op) {
@@ -1372,7 +1372,7 @@ expr(A) ::= expr(A) in_op(N) LP exprlist(Y) RP(E). [IN] {
     */
     sql_expr_delete(pParse->db, A.pExpr, false);
     int tk = N == 0 ? TK_FALSE : TK_TRUE;
-    A.pExpr = sql_expr_new_anon(pParse->db, tk);
+    A.pExpr = sql_expr_new_anon(tk);
     if (A.pExpr == NULL) {
       pParse->is_aborted = true;
       return;

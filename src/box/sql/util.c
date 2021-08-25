@@ -141,10 +141,10 @@ sql_normalized_name_db_new(struct sql *db, const char *name, int len)
 {
 	int size = len + 1;
 	ERROR_INJECT(ERRINJ_SQL_NAME_NORMALIZATION, {
-		diag_set(OutOfMemory, size, "sqlDbMallocRawNN", "res");
+		diag_set(OutOfMemory, size, "sql_malloc", "res");
 		return NULL;
 	});
-	char *res = sqlDbMallocRawNN(db, size);
+	char *res = sql_malloc(size);
 	if (res == NULL)
 		return NULL;
 	int rc = sql_normalize_name(res, size, name, len);
@@ -916,12 +916,12 @@ sqlHexToInt(int h)
  * the calling routine.
  */
 void *
-sqlHexToBlob(sql * db, const char *z, int n)
+sqlHexToBlob(const char *z, int n)
 {
 	char *zBlob;
 	int i;
 
-	zBlob = (char *)sqlDbMallocRawNN(db, n / 2 + 1);
+	zBlob = (char *)sql_malloc(n / 2 + 1);
 	n--;
 	if (zBlob) {
 		for (i = 0; i < n; i += 2) {

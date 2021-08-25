@@ -1798,7 +1798,7 @@ whereLoopResize(sql * db, WhereLoop * p, int n)
 	if (p->nLSlot >= n)
 		return 0;
 	n = (n + 7) & ~7;
-	paNew = sqlDbMallocRawNN(db, sizeof(p->aLTerm[0]) * n);
+	paNew = sql_malloc(sizeof(p->aLTerm[0]) * n);
 	if (paNew == 0)
 		return -1;
 	memcpy(paNew, p->aLTerm, sizeof(p->aLTerm[0]) * p->nLSlot);
@@ -2136,7 +2136,7 @@ whereLoopInsert(WhereLoopBuilder * pBuilder, WhereLoop * pTemplate)
 #endif
 	if (p == 0) {
 		/* Allocate a new WhereLoop to add to the end of the list */
-		*ppPrev = p = sqlDbMallocRawNN(db, sizeof(WhereLoop));
+		*ppPrev = p = sql_malloc(sizeof(WhereLoop));
 		if (p == 0)
 			return -1;
 		whereLoopInit(p);
@@ -3660,7 +3660,7 @@ wherePathSolver(WhereInfo * pWInfo, LogEst nRowEst)
 	nSpace =
 	    (sizeof(WherePath) + sizeof(WhereLoop *) * nLoop) * mxChoice * 2;
 	nSpace += sizeof(LogEst) * nOrderBy;
-	pSpace = sqlDbMallocRawNN(db, nSpace);
+	pSpace = sql_malloc(nSpace);
 	if (pSpace == 0)
 		return -1;
 	aTo = (WherePath *) pSpace;
@@ -4343,7 +4343,7 @@ sqlWhereBegin(Parse * pParse,	/* The parser context */
 	 */
 	nByteWInfo =
 	    ROUND8(sizeof(WhereInfo) + (nTabList - 1) * sizeof(WhereLevel));
-	pWInfo = sqlDbMallocRawNN(db, nByteWInfo + sizeof(WhereLoop));
+	pWInfo = sql_malloc(nByteWInfo + sizeof(WhereLoop));
 	if (db->mallocFailed) {
 		sqlDbFree(db, pWInfo);
 		pWInfo = 0;

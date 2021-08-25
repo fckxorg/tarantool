@@ -55,7 +55,7 @@ sqlVdbeCreate(Parse * pParse)
 	assert(!pParse->parse_only);
 	sql *db = pParse->db;
 	Vdbe *p;
-	p = sqlDbMallocRawNN(db, sizeof(Vdbe));
+	p = sql_malloc(sizeof(Vdbe));
 	if (p == 0)
 		return 0;
 	memset(p, 0, sizeof(Vdbe));
@@ -339,7 +339,7 @@ sqlVdbeAddOp4Dup8(Vdbe * p,	/* Add the opcode to this VM */
 		      int p4type	/* P4 operand type */
     )
 {
-	char *p4copy = sqlDbMallocRawNN(sqlVdbeDb(p), 8);
+	char *p4copy = sql_malloc(8);
 	if (p4copy)
 		memcpy(p4copy, zP4, 8);
 	return sqlVdbeAddOp4(p, op, p1, p2, p3, p4copy, p4type);
@@ -1559,7 +1559,7 @@ sqlVdbeMakeReady(Vdbe * p,	/* The VDBE */
 		    allocSpace(&x, p->apCsr, nCursor * sizeof(VdbeCursor *));
 		if (x.nNeeded == 0)
 			break;
-		x.pSpace = p->pFree = sqlDbMallocRawNN(db, x.nNeeded);
+		x.pSpace = p->pFree = sql_malloc(x.nNeeded);
 		x.nFree = x.nNeeded;
 	} while (!db->mallocFailed);
 

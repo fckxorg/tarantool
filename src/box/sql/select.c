@@ -250,7 +250,7 @@ sql_key_info_new_from_space_info(const struct sql_space_info *info)
 	assert(part_count > 0);
 	uint32_t size = sizeof(struct sql_key_info) +
 			part_count * sizeof(struct key_part_def);
-	struct sql_key_info *key_info = sqlDbMallocRawNN(sql_get(), size);
+	struct sql_key_info *key_info = sql_malloc(size);
 	if (key_info == NULL)
 		return NULL;
 	key_info->db = sql_get();
@@ -329,7 +329,7 @@ sqlSelectNew(Parse * pParse,	/* Parsing context */
 	Select standin;
 	sql *db = pParse->db;
 	if (pEList == 0) {
-		struct Expr *expr = sql_expr_new_anon(db, TK_ASTERISK);
+		struct Expr *expr = sql_expr_new_anon(TK_ASTERISK);
 		if (expr == NULL)
 			pParse->is_aborted = true;
 		pEList = sql_expr_list_append(db, NULL, expr);
@@ -363,7 +363,7 @@ sqlSelectNew(Parse * pParse,	/* Parsing context */
 	standin.pWith = 0;
 	assert(pOffset == 0 || pLimit != 0 || pParse->is_aborted
 	       || db->mallocFailed != 0);
-	Select *pNew = sqlDbMallocRawNN(db, sizeof(*pNew));
+	Select *pNew = sql_malloc(sizeof(*pNew));
 	if (db->mallocFailed) {
 		clearSelect(db, &standin, 0);
 		if (pNew != NULL)
@@ -486,7 +486,7 @@ sql_select_expand_from_tables(struct Select *select)
 {
 	assert(select != NULL);
 	struct Walker walker;
-	struct SrcList *table_names = sql_src_list_new(sql_get());
+	struct SrcList *table_names = sql_src_list_new();
 	if (table_names == NULL)
 		return NULL;
 	memset(&walker, 0, sizeof(walker));
@@ -708,8 +708,8 @@ addWhereTerm(Parse * pParse,	/* Parsing context */
 	assert(pSrc->a[iLeft].space != NULL);
 	assert(pSrc->a[iRight].space != NULL);
 
-	struct Expr *pE1 = sql_expr_new_column(db, pSrc, iLeft, iColLeft);
-	struct Expr *pE2 = sql_expr_new_column(db, pSrc, iRight, iColRight);
+	struct Expr *pE1 = sql_expr_new_column(pSrc, iLeft, iColLeft);
+	struct Expr *pE2 = sql_expr_new_column(pSrc, iRight, iColRight);
 	if (pE1 == NULL || pE2 == NULL)
 		pParse->is_aborted = true;
 	pEq = sqlPExpr(pParse, TK_EQ, pE1, pE2);
@@ -1611,7 +1611,7 @@ sql_key_info_sizeof(uint32_t part_count)
 struct sql_key_info *
 sql_key_info_new(sql *db, uint32_t part_count)
 {
-	struct sql_key_info *key_info = sqlDbMallocRawNN(db,
+	struct sql_key_info *key_info = sql_malloc(
 				sql_key_info_sizeof(part_count));
 	if (key_info == NULL) {
 		sqlOomFault(db);
@@ -3559,7 +3559,7 @@ multiSelectOrderBy(Parse * pParse,	/* Parsing context */
 			}
 			if (j == nOrderBy) {
 				struct Expr *pNew =
-					sql_expr_new_anon(db, TK_INTEGER);
+					sql_expr_new_anon(TK_INTEGER);
 				if (pNew == NULL) {
 					pParse->is_aborted = true;
 					return 1;
@@ -3582,7 +3582,7 @@ multiSelectOrderBy(Parse * pParse,	/* Parsing context */
 	 * to the right and the left are evaluated, they use the correct
 	 * collation.
 	 */
-	aPermute = sqlDbMallocRawNN(db, sizeof(int) * (nOrderBy + 1));
+	aPermute = sql_malloc(sizeof(int) * (nOrderBy + 1));
 	if (aPermute) {
 		struct ExprList_item *pItem;
 		aPermute[0] = nOrderBy;
@@ -4753,7 +4753,7 @@ convertCompoundSelectToSubquery(Walker * pWalker, Select * p)
 		return WRC_Abort;
 	*pNew = *p;
 	p->pSrc = pNewSrc;
-	struct Expr *expr = sql_expr_new_anon(db, TK_ASTERISK);
+	struct Expr *expr = sql_expr_new_anon(TK_ASTERISK);
 	if (expr == NULL)
 		pParse->is_aborted = true;
 	p->pEList = sql_expr_list_append(pParse->db, NULL, expr);
@@ -5262,7 +5262,7 @@ selectExpander(Walker * pWalker, Select * p)
 								continue;
 							}
 						}
-						pRight = sql_expr_new_named(db,
+						pRight = sql_expr_new_named(
 								TK_ID, zName);
 						if (pRight == NULL)
 							pParse->is_aborted = true;
@@ -5272,7 +5272,6 @@ selectExpander(Walker * pWalker, Select * p)
 						    || pTabList->nSrc > 1) {
 							Expr *pLeft;
 							pLeft = sql_expr_new_named(
-									db,
 									TK_ID,
 									zTabName);
 							if (pLeft == NULL) {

@@ -482,10 +482,9 @@ lookupName(Parse * pParse,	/* The parsing context */
 }
 
 struct Expr *
-sql_expr_new_column(struct sql *db, struct SrcList *src_list, int src_idx,
-		    int column)
+sql_expr_new_column(struct SrcList *src_list, int src_idx, int column)
 {
-	struct Expr *expr = sql_expr_new_anon(db, TK_COLUMN_REF);
+	struct Expr *expr = sql_expr_new_anon(TK_COLUMN_REF);
 	if (expr == NULL)
 		return NULL;
 	struct SrcList_item *item = &src_list->a[src_idx];
@@ -921,7 +920,7 @@ resolveCompoundOrderBy(Parse * pParse,	/* Parsing context.  Leave error messages
 				 * taking care to preserve the COLLATE clause if it exists
 				 */
 				struct Expr *pNew =
-					sql_expr_new_anon(db, TK_INTEGER);
+					sql_expr_new_anon(TK_INTEGER);
 				if (pNew == NULL) {
 					pParse->is_aborted = true;
 					return 1;
@@ -1288,7 +1287,7 @@ resolveSelectStep(Walker * pWalker, Select * p)
 			 * restrict it directly).
 			 */
 			sql_expr_delete(db, p->pLimit, false);
-			p->pLimit = sql_expr_new(db, TK_INTEGER,
+			p->pLimit = sql_expr_new(TK_INTEGER,
 						 &sqlIntTokens[1]);
 			if (p->pLimit == NULL)
 				pParse->is_aborted = true;

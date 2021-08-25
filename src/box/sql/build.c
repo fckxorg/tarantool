@@ -619,7 +619,7 @@ sqlAddPrimaryKey(struct Parse *pParse)
 		struct ExprList *list;
 		struct Token token;
 		sqlTokenInit(&token, space->def->fields[iCol].name);
-		struct Expr *expr = sql_expr_new(db, TK_ID, &token);
+		struct Expr *expr = sql_expr_new(TK_ID, &token);
 		if (expr == NULL) {
 			pParse->is_aborted = true;
 			goto primary_key_exit;
@@ -1612,13 +1612,13 @@ sql_id_eq_str_expr(struct Parse *parse, const char *col_name,
 		   const char *col_value)
 {
 	struct sql *db = parse->db;
-	struct Expr *col_name_expr = sql_expr_new_named(db, TK_ID, col_name);
+	struct Expr *col_name_expr = sql_expr_new_named(TK_ID, col_name);
 	if (col_name_expr == NULL) {
 		parse->is_aborted = true;
 		return NULL;
 	}
 	struct Expr *col_value_expr =
-		sql_expr_new_named(db, TK_STRING, col_value);
+		sql_expr_new_named(TK_STRING, col_value);
 	if (col_value_expr == NULL) {
 		sql_expr_delete(db, col_name_expr, false);
 		parse->is_aborted = true;
@@ -1634,7 +1634,7 @@ vdbe_emit_stat_space_clear(struct Parse *parse, const char *stat_table_name,
 	assert(idx_name != NULL || table_name != NULL);
 	struct sql *db = parse->db;
 	assert(!db->mallocFailed);
-	struct SrcList *src_list = sql_src_list_new(db);
+	struct SrcList *src_list = sql_src_list_new();
 	if (src_list == NULL) {
 		parse->is_aborted = true;
 		return;
@@ -2777,7 +2777,7 @@ sql_create_index(struct Parse *parse) {
 		struct Token prev_col;
 		uint32_t last_field = def->field_count - 1;
 		sqlTokenInit(&prev_col, def->fields[last_field].name);
-		struct Expr *expr = sql_expr_new(db, TK_ID, &prev_col);
+		struct Expr *expr = sql_expr_new(TK_ID, &prev_col);
 		if (expr == NULL) {
 			parse->is_aborted = true;
 			goto exit_create_index;
@@ -3152,12 +3152,12 @@ sql_src_list_enlarge(struct sql *db, struct SrcList *src_list, int new_slots,
 }
 
 struct SrcList *
-sql_src_list_new(struct sql *db)
+sql_src_list_new()
 {
-	struct SrcList *src_list = sqlDbMallocRawNN(db, sizeof(struct SrcList));
+	struct SrcList *src_list = sql_malloc(sizeof(struct SrcList));
 	if (src_list == NULL) {
 		diag_set(OutOfMemory, sizeof(struct SrcList),
-			 "sqlDbMallocRawNN", "src_list");
+			 "sql_malloc", "src_list");
 		return NULL;
 	}
 	src_list->nAlloc = 1;
@@ -3172,7 +3172,7 @@ sql_src_list_append(struct sql *db, struct SrcList *list,
 		    struct Token *name_token)
 {
 	if (list == NULL) {
-		list = sql_src_list_new(db);
+		list = sql_src_list_new();
 		if (list == NULL)
 			return NULL;
 	} else {
