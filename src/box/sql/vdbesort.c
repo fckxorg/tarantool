@@ -907,7 +907,7 @@ vdbeMergeEngineNew(int nReader)
 		N += N;
 	nByte = sizeof(MergeEngine) + N * (sizeof(int) + sizeof(PmaReader));
 
-	pNew = (MergeEngine *) sqlMallocZero(nByte);
+	pNew = sql_calloc(nByte);
 	if (pNew) {
 		pNew->nTree = N;
 		pNew->pTask = 0;
@@ -1130,8 +1130,7 @@ vdbeSorterSort(SortSubtask * pTask, SorterList * pList)
 	p = pList->pList;
 	pTask->xCompare = vdbeSorterGetCompare(pTask->pSorter);
 
-	aSlot =
-	    (SorterRecord **) sqlMallocZero(64 * sizeof(SorterRecord *));
+	aSlot = sql_calloc(64 * sizeof(SorterRecord *));
 	if (!aSlot) {
 		return -1;
 	}
@@ -1631,8 +1630,8 @@ vdbeIncrMergerNew(SortSubtask * pTask,	/* The thread that will be using the new 
     )
 {
 	int rc = 0;
-	IncrMerger *pIncr = *ppOut =
-		(IncrMerger *) sqlMallocZero(sizeof(*pIncr));
+	IncrMerger *pIncr = sql_calloc(sizeof(*pIncr));
+	*ppOut = pIncr;
 	if (pIncr) {
 		pIncr->pMerger = pMerger;
 		pIncr->pTask = pTask;

@@ -155,7 +155,7 @@ sqlOsOpenMalloc(sql_vfs * pVfs,
 {
 	int rc;
 	sql_file *pFile;
-	pFile = (sql_file *) sqlMallocZero(pVfs->szOsFile);
+	pFile = sql_calloc(pVfs->szOsFile);
 	if (pFile) {
 		rc = sqlOsOpen(pVfs, zFile, pFile, flags, pOutFlags);
 		if (rc != 0) {

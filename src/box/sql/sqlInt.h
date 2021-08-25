@@ -2492,7 +2492,6 @@ unsigned sqlStrlen30(const char *);
 #define sqlStrNICmp sql_strnicmp
 
 void *sqlMalloc(u64);
-void *sqlMallocZero(u64);
 void *sqlDbMallocRaw(sql *, u64);
 void *sqlDbMallocRawNN(sql *, u64);
 char *sqlDbStrDup(sql *, const char *);

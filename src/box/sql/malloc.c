@@ -286,19 +286,6 @@ sql_realloc64(void *pOld, sql_uint64 n)
 	return sqlRealloc(pOld, n);
 }
 
-/*
- * Allocate and zero memory.
- */
-void *
-sqlMallocZero(u64 n)
-{
-	void *p = sqlMalloc(n);
-	if (p) {
-		memset(p, 0, (size_t) n);
-	}
-	return p;
-}
-
 /* Finish the work of sqlDbMallocRawNN for the unusual and
  * slower case when the allocation cannot be fulfilled using lookaside.
  */
