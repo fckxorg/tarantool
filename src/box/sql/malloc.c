@@ -100,6 +100,38 @@ sql_calloc(uint32_t size)
 	return (void *)buf;
 }
 
+void *
+sql_realloc(void *ptr_old, uint32_t size_new)
+{
+	if (ptr_old == NULL)
+		return sql_malloc(size_new);
+	if (size_new == 0 || size_new >= 0x7fffffff){
+		sql_free(ptr_old);
+		sql_get()->mallocFailed = 1;
+		diag_set(ClientError, ER_SQL_EXECUTE,
+			 tt_sprintf("Cannot allocate %d bytes", size_new));
+		return NULL;
+	}
+	if (is_lookaside(ptr_old)) {
+		struct sql *db = sql_get();
+		if (size_new <= db->lookaside.sz)
+			return ptr_old;
+		char *ptr_new = sql_malloc(size_new);
+		if (ptr_new == NULL)
+			return NULL;
+		memcpy(ptr_new, ptr_old, db->lookaside.sz);
+		lookaside_free(ptr_old);
+		return ptr_new;
+	}
+	uint32_t size = ROUND8(size_new) + 8;
+	int64_t *buf = ptr_old;
+	--buf;
+	buf = realloc(buf, size);
+	buf[0] = size;
+	++buf;
+	return (void *)buf;
+}
+
 void
 sql_free(void *ptr)
 {

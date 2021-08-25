@@ -342,6 +342,9 @@ void *
 sql_calloc(uint32_t size);
 
 void *
+sql_realloc(void *ptr_old, uint32_t size_new);
+
+void *
 sql_realloc64(void *, sql_uint64);
 
 void
@@ -2872,7 +2875,7 @@ void
 sql_drop_table(struct Parse *);
 void sqlInsert(Parse *, SrcList *, Select *, IdList *,
 	       enum on_conflict_action);
-void *sqlArrayAllocate(sql *, void *, int, int *, int *);
+void *sqlArrayAllocate(void *, int, int *, int *);
 
 /**
  * Append a new element to the given IdList. Create a new IdList
@@ -2898,7 +2901,7 @@ int sqlIdListIndex(IdList *, const char *);
  * For example, suppose a SrcList initially contains two entries:
  * A,B.
  * To append 3 new entries onto the end, do this:
- *    sql_src_list_enlarge(db, src_list, 3, 2);
+ *    sql_src_list_enlarge(src_list, 3, 2);
  *
  * After the call above it would contain:  A, B, nil, nil, nil.
  * If the start_idx argument had been 1 instead of 2, then the
@@ -2914,8 +2917,7 @@ int sqlIdListIndex(IdList *, const char *);
  * @retval NULL Otherwise. The diag message is set.
  */
 struct SrcList *
-sql_src_list_enlarge(struct sql *db, struct SrcList *src_list, int new_slots,
-		     int start_idx);
+sql_src_list_enlarge(struct SrcList *src_list, int new_slots, int start_idx);
 
 /**
  * Allocate a new empty SrcList object.
