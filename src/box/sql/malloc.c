@@ -61,7 +61,7 @@ lookaside_free(void *ptr)
 }
 
 static int
-is_lookaside(void *ptr)
+is_lookaside(const void *ptr)
 {
 	struct sql *db = sql_get();
 	return SQL_WITHIN(ptr, db->lookaside.pStart, db->lookaside.pEnd);
@@ -101,6 +101,17 @@ sql_free(void *ptr)
 	int64_t *buf = ptr;
 	--buf;
 	free(buf);
+}
+
+uint32_t
+sql_malloc_size(const void *ptr)
+{
+	assert(ptr != NULL);
+	if (is_lookaside(ptr))
+		return sql_get()->lookaside.sz;
+	const int64_t *buf = ptr;
+	--buf;
+	return buf[0];
 }
 
 /*

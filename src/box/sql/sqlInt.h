@@ -347,6 +347,9 @@ sql_realloc64(void *, sql_uint64);
 void
 sql_free(void *ptr);
 
+uint32_t
+sql_malloc_size(const void *ptr);
+
 int
 sql_stricmp(const char *, const char *);
 
