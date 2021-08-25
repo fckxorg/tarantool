@@ -337,7 +337,7 @@ set_str_dynamic(struct Mem *mem, char *value, uint32_t len, int alloc_type)
 	} else {
 		mem->xDel = NULL;
 		mem->zMalloc = mem->z;
-		mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
+		mem->szMalloc = sql_malloc_size(mem->zMalloc);
 	}
 }
 
@@ -453,7 +453,7 @@ set_bin_dynamic(struct Mem *mem, char *value, uint32_t size, int alloc_type)
 	} else {
 		mem->xDel = NULL;
 		mem->zMalloc = mem->z;
-		mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
+		mem->szMalloc = sql_malloc_size(mem->zMalloc);
 	}
 }
 
@@ -1916,7 +1916,7 @@ mem_copy(struct Mem *to, const struct Mem *from)
 	to->zMalloc = sqlDbReallocOrFree(to->db, to->zMalloc, to->n);
 	if (to->zMalloc == NULL)
 		return -1;
-	to->szMalloc = sqlDbMallocSize(to->db, to->zMalloc);
+	to->szMalloc = sql_malloc_size(to->zMalloc);
 	memcpy(to->zMalloc, to->z, to->n);
 	to->z = to->zMalloc;
 	to->flags &= MEM_Term;
@@ -2736,7 +2736,7 @@ sqlVdbeCheckMemInvariants(Mem * p)
 
 	/* The szMalloc field holds the correct memory allocation size */
 	assert(p->szMalloc == 0 ||
-	       p->szMalloc == sqlDbMallocSize(p->db, p->zMalloc));
+	       p->szMalloc == (int)sql_malloc_size(p->zMalloc));
 
 	/* If p holds a string or blob, the Mem.z must point to exactly
 	 * one of the following:
@@ -2924,7 +2924,7 @@ sqlVdbeMemGrow(struct Mem *pMem, int n, int bPreserve)
 	testcase(bPreserve && pMem->z == 0);
 
 	assert(pMem->szMalloc == 0 ||
-	       pMem->szMalloc == sqlDbMallocSize(pMem->db, pMem->zMalloc));
+	       pMem->szMalloc == (int)sql_malloc_size(pMem->zMalloc));
 	if (pMem->szMalloc < n) {
 		if (n < 32)
 			n = 32;
@@ -2943,8 +2943,7 @@ sqlVdbeMemGrow(struct Mem *pMem, int n, int bPreserve)
 			pMem->szMalloc = 0;
 			return -1;
 		} else {
-			pMem->szMalloc = sqlDbMallocSize(pMem->db,
-							 pMem->zMalloc);
+			pMem->szMalloc = sql_malloc_size(pMem->zMalloc);
 		}
 	}
 

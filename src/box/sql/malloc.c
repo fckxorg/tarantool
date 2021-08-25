@@ -229,16 +229,6 @@ sqlMallocSize(void *p)
 	return sql_sized_sizeof(p);
 }
 
-int
-sqlDbMallocSize(sql * db, void *p)
-{
-	assert(p != 0);
-	if (db == 0 || !isLookaside(db, p))
-		return sql_sized_sizeof(p);
-	else
-		return db->lookaside.sz;
-}
-
 /*
  * Free memory that might be associated with a particular database
  * connection.

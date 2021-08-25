@@ -106,7 +106,7 @@ whereClauseInsert(WhereClause * pWC, Expr * p, u16 wtFlags)
 		if (pOld != pWC->aStatic) {
 			sqlDbFree(db, pOld);
 		}
-		pWC->nSlot = sqlDbMallocSize(db, pWC->a) / sizeof(pWC->a[0]);
+		pWC->nSlot = sql_malloc_size(pWC->a) / sizeof(pWC->a[0]);
 	}
 	pTerm = &pWC->a[idx = pWC->nTerm++];
 	if (p && ExprHasProperty(p, EP_Unlikely)) {

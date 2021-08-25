@@ -2507,7 +2507,6 @@ void *sqlDbReallocOrFree(sql *, void *, u64);
 void *sqlDbRealloc(sql *, void *, u64);
 void sqlDbFree(sql *, void *);
 int sqlMallocSize(void *);
-int sqlDbMallocSize(sql *, void *);
 
 int sqlIsNaN(double);
 
