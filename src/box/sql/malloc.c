@@ -97,7 +97,7 @@ sql_free(void *ptr)
 	if (ptr == NULL)
 		return;
 	if (is_lookaside(ptr))
-		lookaside_free(ptr);
+		return lookaside_free(ptr);
 	int64_t *buf = ptr;
 	--buf;
 	free(buf);
@@ -202,12 +202,6 @@ sqlMalloc(u64 n)
 	}
 	assert(EIGHT_BYTE_ALIGNMENT(p));	/* IMP: R-11148-40995 */
 	return p;
-}
-
-void *
-sql_malloc64(sql_uint64 n)
-{
-	return sqlMalloc(n);
 }
 
 /*

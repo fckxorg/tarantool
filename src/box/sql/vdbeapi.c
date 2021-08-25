@@ -216,20 +216,6 @@ sql_result_text(sql_context * pCtx,
 }
 
 void
-sql_result_text64(sql_context * pCtx,
-		      const char *z,
-		      sql_uint64 n,
-		      void (*xDel) (void *))
-{
-	assert(xDel != SQL_DYNAMIC);
-	if (n > 0x7fffffff) {
-		(void)invokeValueDestructor(z, xDel, pCtx);
-	} else {
-		setResultStrOrError(pCtx, z, (int)n, xDel);
-	}
-}
-
-void
 sql_result_value(sql_context * pCtx, sql_value * pValue)
 {
 	mem_copy(pCtx->pOut, pValue);

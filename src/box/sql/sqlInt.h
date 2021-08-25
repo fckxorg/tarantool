@@ -388,10 +388,6 @@ sql_result_text(sql_context *, const char *,
 		    int, void (*)(void *));
 
 void
-sql_result_text64(sql_context *, const char *,
-		      sql_uint64, void (*)(void *));
-
-void
 sql_result_value(sql_context *,
 		     sql_value *);
 

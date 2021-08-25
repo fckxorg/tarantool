@@ -1199,7 +1199,7 @@ charFunc(sql_context * context, int argc, sql_value ** argv)
 {
 	unsigned char *z, *zOut;
 	int i;
-	zOut = z = sql_malloc64(argc * 4 + 1);
+	zOut = z = sql_malloc(argc * 4 + 1);
 	if (z == NULL) {
 		context->is_aborted = true;
 		return;
@@ -1230,7 +1230,7 @@ charFunc(sql_context * context, int argc, sql_value ** argv)
 			*zOut++ = 0x80 + (u8) (c & 0x3F);
 		}
 	}
-	sql_result_text64(context, (char *)z, zOut - z, sql_free);
+	mem_set_str_allocated(context->pOut, (char *)z, zOut - z);
 }
 
 /*
