@@ -748,7 +748,7 @@ sql_row_trigger_program(struct Parse *parser, struct sql_trigger *trigger,
 	 * Allocate and populate a new Parse context to use for
 	 * coding the trigger sub-program.
 	 */
-	pSubParse = sqlStackAllocZero(db, sizeof(Parse));
+	pSubParse = sqlDbMallocZero(db, sizeof(Parse));
 	if (!pSubParse)
 		return 0;
 	sql_parser_create(pSubParse, db, parser->sql_flags);
@@ -820,7 +820,7 @@ sql_row_trigger_program(struct Parse *parser, struct sql_trigger *trigger,
 
 	assert(!pSubParse->pTriggerPrg && !pSubParse->nMaxArg);
 	sql_parser_destroy(pSubParse);
-	sqlStackFree(db, pSubParse);
+	sqlDbFree(db, pSubParse);
 
 	return pPrg;
 }

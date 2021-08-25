@@ -1351,7 +1351,7 @@ sqlWhereCodeOneLoopStart(WhereInfo * pWInfo,	/* Complete information about the W
 		sqlVdbeResolveLabel(v, iLoopBody);
 
 		if (pWInfo->nLevel > 1)
-			sqlStackFree(db, pOrTab);
+			sqlDbFree(db, pOrTab);
 		if (!untestedTerms)
 			disableTerm(pLevel, pTerm);
 	} else

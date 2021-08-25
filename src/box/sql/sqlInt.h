@@ -2506,24 +2506,6 @@ void sqlDbFree(sql *, void *);
 int sqlMallocSize(void *);
 int sqlDbMallocSize(sql *, void *);
 
-/*
- * On systems with ample stack space and that support alloca(), make
- * use of alloca() to obtain space for large automatic objects.  By default,
- * obtain space from malloc().
- *
- * The alloca() routine never returns NULL.  This will cause code paths
- * that deal with sqlStackAlloc() failures to be unreachable.
- */
-#ifdef SQL_USE_ALLOCA
-#define sqlStackAllocRaw(D,N)   alloca(N)
-#define sqlStackAllocZero(D,N)  memset(alloca(N), 0, N)
-#define sqlStackFree(D,P)
-#else
-#define sqlStackAllocRaw(D,N)   sqlDbMallocRaw(D,N)
-#define sqlStackAllocZero(D,N)  sqlDbMallocZero(D,N)
-#define sqlStackFree(D,P)       sqlDbFree(D,P)
-#endif
-
 int sqlIsNaN(double);
 
 /*
