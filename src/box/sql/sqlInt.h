@@ -953,7 +953,7 @@ typedef u64 uptr;
  * pointer will work here as long as it is distinct from sql_STATIC
  * and sql_TRANSIENT.
  */
-#define SQL_DYNAMIC   ((sql_destructor_type)sqlMallocSize)
+#define SQL_DYNAMIC   ((sql_destructor_type)sql_malloc_size)
 
 /*
  * The usual case where Writable Static Data (WSD) is supported,
@@ -2500,7 +2500,6 @@ void *sqlRealloc(void *, u64);
 void *sqlDbReallocOrFree(sql *, void *, u64);
 void *sqlDbRealloc(sql *, void *, u64);
 void sqlDbFree(sql *, void *);
-int sqlMallocSize(void *);
 
 int sqlIsNaN(double);
 

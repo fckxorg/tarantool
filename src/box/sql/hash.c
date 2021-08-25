@@ -155,7 +155,7 @@ rehash(Hash * pH, unsigned int new_size)
 		return 0;
 	sql_free(pH->ht);
 	pH->ht = new_ht;
-	pH->htsize = new_size = sqlMallocSize(new_ht) / sizeof(struct _ht);
+	pH->htsize = new_size = sql_malloc_size(new_ht) / sizeof(struct _ht);
 	memset(new_ht, 0, new_size * sizeof(struct _ht));
 	for (elem = pH->first, pH->first = 0; elem; elem = next_elem) {
 		unsigned int h = strHash(elem->pKey) % new_size;

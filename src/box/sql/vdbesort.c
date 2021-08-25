@@ -1142,7 +1142,7 @@ vdbeSorterSort(SortSubtask * pTask, SorterList * pList)
 				pNext = 0;
 			} else {
 				assert(p->u.iNext <
-				       sqlMallocSize(pList->aMemory));
+				       (int)sql_malloc_size(pList->aMemory));
 				pNext =
 				    (SorterRecord *) & pList->aMemory[p->u.
 								      iNext];
