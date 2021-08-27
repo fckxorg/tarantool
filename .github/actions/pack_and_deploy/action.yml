@@ -43,7 +43,7 @@ runs:
               libpython3-dev librpm-dev libssl-dev libsqlite3-dev \
               liblzma-dev zlib1g-dev libzstd-dev doxygen
             cmake .. -DWITH_ZCHUNK=OFF -DWITH_LIBMODULEMD=OFF
-            make -j $(nproc)
+            make -j 2
             sudo make install
             cd ../..
           fi
