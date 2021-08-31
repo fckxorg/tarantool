@@ -130,8 +130,6 @@ epoll_modify (EV_P_ int fd, int oev, int nev)
 
       return;
     }
-  else
-    assert (("libev: I/O watcher with invalid fd found in epoll_ctl", errno != EBADF && errno != ELOOP && errno != EINVAL));
 
   fd_kill (EV_A_ fd);
 

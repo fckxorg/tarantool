@@ -524,7 +524,6 @@ linuxaio_poll (EV_P_ ev_tstamp timeout)
           }
         else if (errno == EBADF)
           {
-            assert (("libev: event loop rejected bad fd", errno != EBADF));
             fd_kill (EV_A_ linuxaio_submits [submitted]->aio_fildes);
 
             res = 1; /* skip this iocb */

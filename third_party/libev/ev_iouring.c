@@ -539,10 +539,7 @@ iouring_process_cqe (EV_P_ struct io_uring_cqe *cqe)
       /*TODO: EINVAL handling (was something failed with this fd)*/
 
       if (res == -EBADF)
-        {
-          assert (("libev: event loop rejected bad fd", res != -EBADF));
           fd_kill (EV_A_ fd);
-        }
       else
         {
           errno = -res;

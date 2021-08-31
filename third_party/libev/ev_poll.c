@@ -117,10 +117,7 @@ poll_poll (EV_P_ ev_tstamp timeout)
             --res;
 
             if (ecb_expect_false (p->revents & POLLNVAL))
-              {
-                assert (("libev: poll found invalid fd in poll set", 0));
                 fd_kill (EV_A_ p->fd);
-              }
             else
               fd_event (
                 EV_A_

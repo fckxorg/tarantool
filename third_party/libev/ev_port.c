@@ -69,10 +69,7 @@ port_associate_and_check (EV_P_ int fd, int ev)
   )
     {
       if (errno == EBADFD)
-        {
-          assert (("libev: port_associate found invalid fd", errno != EBADFD));
           fd_kill (EV_A_ fd);
-        }
       else
         ev_syserr ("(libev) port_associate");
     }
