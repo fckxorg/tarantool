@@ -1928,6 +1928,24 @@ mem_move(struct Mem *to, struct Mem *from)
 }
 
 int
+mem_append(struct Mem *mem, const char *value, uint32_t len)
+{
+	assert((mem->type & (MEM_TYPE_BIN | MEM_TYPE_STR)) != 0);
+	if (len == 0)
+		return 0;
+	int new_size = mem->n + len;
+	/*
+	 * Force exponential buffer size growth to avoid having to call this
+	 * routine too often.
+	 */
+	if (sqlVdbeMemGrow(mem, new_size + mem->n, 1) != 0)
+		return -1;
+	memcpy(&mem->z[mem->n], value, len);
+	mem->n = new_size;
+	return 0;
+}
+
+int
 mem_concat(const struct Mem *a, const struct Mem *b, struct Mem *result)
 {
 	if (mem_is_any_null(a, b)) {
