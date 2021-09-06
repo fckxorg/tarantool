@@ -182,6 +182,13 @@ struct iproto_thread {
 	 * Iproto binary listener
 	 */
 	struct evio_service binary;
+	/**
+	 * Request count currently processed by tx thread.
+	 * This field is updated only in the tx thread.
+	 */
+	size_t requests_in_progress;
+	/** Requests count currently pending in stream queue. */
+	size_t requests_in_stream_queue;
 };
 
 static struct iproto_thread *iproto_threads;
@@ -365,6 +372,9 @@ enum rmean_net_name {
 	IPROTO_CONNECTIONS,
 	IPROTO_REQUESTS,
 	IPROTO_STREAMS,
+	REQUESTS_IN_PROGRESS,
+	REQUESTS_IN_STREAM_QUEUE,
+	REQUESTS_IN_CBUS_QUEUE,
 	IPROTO_LAST,
 };
 
@@ -374,6 +384,9 @@ const char *rmean_net_strings[IPROTO_LAST] = {
 	"CONNECTIONS",
 	"REQUESTS",
 	"STREAMS",
+	"REQUESTS_IN_PROGRESS",
+	"REQUESTS_IN_STREAM_QUEUE",
+	"REQUESTS_IN_CBUS_QUEUE",
 };
 
 static void
@@ -951,6 +964,15 @@ iproto_connection_input_buffer(struct iproto_connection *con)
 	return new_ibuf;
 }
 
+
+static inline void
+iproto_stream_update_request_stats_on_start(struct iproto_stream *stream)
+{
+	struct iproto_thread *iproto_thread = stream->connection->iproto_thread;
+	iproto_thread->requests_in_stream_queue++;
+	rmean_collect(iproto_thread->rmean, REQUESTS_IN_STREAM_QUEUE, 1);
+}
+
 /**
  * Check if message belongs to stream (stream_id != 0), and if it
  * is so create new stream or get stream from connection streams
@@ -997,6 +1019,8 @@ iproto_msg_start_processing_in_stream(struct iproto_msg *msg)
 	 * the message only if the message queue in the stream was empty.
 	 */
 	bool was_not_empty = !stailq_empty(&stream->pending_requests);
+	if (was_not_empty)
+		iproto_stream_update_request_stats_on_start(stream);
 	stailq_add_tail_entry(&stream->pending_requests, msg, in_stream);
 	return was_not_empty ? 1 : 0;
 }
@@ -1078,6 +1102,8 @@ err_msgpack:
 			 * This can't throw, but should not be
 			 * done in case of exception.
 			 */
+			struct rmean *rmean = con->iproto_thread->rmean;
+			rmean_collect(rmean, REQUESTS_IN_CBUS_QUEUE, 1);
 			cpipe_push_input(&con->iproto_thread->tx_pipe, &msg->base);
 			n_requests++;
 		}
@@ -1730,6 +1756,21 @@ tx_accept_wpos(struct iproto_connection *con, const struct iproto_wpos *wpos)
 	}
 }
 
+static inline void
+tx_update_request_stats_on_accept_msg(struct iproto_msg *msg)
+{
+	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
+	iproto_thread->requests_in_progress++;
+	rmean_collect(iproto_thread->rmean, REQUESTS_IN_PROGRESS, 1);
+}
+
+static inline void
+tx_update_request_stats_on_end_msg(struct iproto_msg *msg)
+{
+	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
+	iproto_thread->requests_in_progress--;
+}
+
 /**
  * Since the processing of requests within a transaction
  * for a stream can occur in different fibers, we store
@@ -1755,6 +1796,7 @@ tx_accept_msg(struct cmsg *m)
 	tx_accept_wpos(msg->connection, &msg->wpos);
 	tx_fiber_init(msg->connection->session, msg->header.sync);
 	tx_prepare_transaction_for_request(msg);
+	tx_update_request_stats_on_accept_msg(msg);
 	return msg;
 }
 
@@ -1765,6 +1807,7 @@ tx_end_msg(struct iproto_msg *msg)
 		assert(msg->stream->txn == NULL);
 		msg->stream->txn = txn_detach();
 	}
+	tx_update_request_stats_on_end_msg(msg);
 }
 
 /**
@@ -2234,6 +2277,14 @@ tx_process_replication(struct cmsg *m)
 		iproto_write_error(con->input.fd, e, ::schema_version,
 				   msg->header.sync);
 	}
+	tx_end_msg(msg);
+}
+
+static inline void
+iproto_stream_update_request_stats_on_finish(struct iproto_stream *stream)
+{
+	struct iproto_connection *con = stream->connection;
+	con->iproto_thread->requests_in_stream_queue--;
 }
 
 static void
@@ -2241,6 +2292,7 @@ iproto_msg_finish_processing_in_stream(struct iproto_msg *msg)
 {
 	struct iproto_connection *con = msg->connection;
 	struct iproto_stream *stream = msg->stream;
+	struct iproto_thread *iproto_thread = con->iproto_thread;
 
 	if (stream == NULL)
 		return;
@@ -2281,6 +2333,8 @@ iproto_msg_finish_processing_in_stream(struct iproto_msg *msg)
 					   in_stream);
 		assert(next != NULL);
 		next->wpos = con->wpos;
+		iproto_stream_update_request_stats_on_finish(stream);
+		rmean_collect(iproto_thread->rmean, REQUESTS_IN_CBUS_QUEUE, 1);
 		cpipe_push_input(&con->iproto_thread->tx_pipe, &next->base);
 		cpipe_flush_input(&con->iproto_thread->tx_pipe);
 	}
@@ -2703,7 +2757,8 @@ iproto_thread_init(struct iproto_thread *iproto_thread)
 			  "rmean_new", "struct rmean");
 		return -1;
 	}
-
+	iproto_thread->requests_in_progress = 0;
+	iproto_thread->requests_in_stream_queue = 0;
 	return 0;
 }
 
@@ -2802,6 +2857,7 @@ struct iproto_cfg_msg: public cbus_call_msg
 			size_t connections;
 			size_t requests;
 			size_t streams;
+			size_t requests_in_stream_queue;
 		};
 		/** Pointer to evio_service, used for bind */
 		struct evio_service *binary;
@@ -2843,6 +2899,8 @@ iproto_fill_stat(struct iproto_thread *iproto_thread,
 		mempool_count(&iproto_thread->iproto_msg_pool);
 	cfg_msg->streams =
 		mempool_count(&iproto_thread->iproto_stream_pool);
+	cfg_msg->requests_in_stream_queue =
+		iproto_thread->requests_in_stream_queue;
 }
 
 static int
@@ -3003,27 +3061,38 @@ iproto_thread_stream_count(int thread_id)
 	return cfg_msg.streams;
 }
 
-size_t
-iproto_request_count(void)
+struct iproto_request_stats
+iproto_request_stats_get(void)
 {
+	struct iproto_request_stats stats = {0, 0, 0, 0};
 	struct iproto_cfg_msg cfg_msg;
-	size_t count = 0;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STAT);
 	for (int i = 0; i < iproto_threads_count; i++) {
 		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
-		count += cfg_msg.requests;
+		stats.total += cfg_msg.requests;
+		stats.in_progress += iproto_threads[i].requests_in_progress;
+		stats.in_stream_queue += cfg_msg.requests_in_stream_queue;
+		stats.in_cbus_queue += cfg_msg.requests -
+			iproto_threads[i].requests_in_progress -
+			cfg_msg.requests_in_stream_queue;
 	}
-	return count;
+	return stats;
 }
 
-size_t
-iproto_thread_request_count(int thread_id)
+struct iproto_request_stats
+iproto_thread_request_stats_get(int thread_id)
 {
+	struct iproto_request_stats stats = {0, 0, 0, 0};
 	struct iproto_cfg_msg cfg_msg;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STAT);
 	assert(thread_id >= 0 && thread_id < iproto_threads_count);
 	iproto_do_cfg(&iproto_threads[thread_id], &cfg_msg);
-	return cfg_msg.requests;
+	stats.total = cfg_msg.requests;
+	stats.in_progress = iproto_threads[thread_id].requests_in_progress;
+	stats.in_stream_queue = cfg_msg.requests_in_stream_queue;
+	stats.in_cbus_queue = stats.total - stats.in_progress -
+		stats.in_stream_queue;
+	return stats;
 }
 
 void

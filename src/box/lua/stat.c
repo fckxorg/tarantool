@@ -68,6 +68,15 @@ inject_current_stat(struct lua_State *L, const char *name, size_t val)
 }
 
 static void
+iproto_request_stats_inject(struct lua_State *L, struct iproto_request_stats *s)
+{
+	inject_current_stat(L, "REQUESTS", s->total);
+	inject_current_stat(L, "REQUESTS_IN_PROGRESS", s->in_progress);
+	inject_current_stat(L, "REQUESTS_IN_STREAM_QUEUE", s->in_stream_queue);
+	inject_current_stat(L, "REQUESTS_IN_CBUS_QUEUE", s->in_cbus_queue);
+}
+
+static void
 fill_stat_item(struct lua_State *L, int rps, int64_t total)
 {
 	lua_pushstring(L, "rps");
@@ -165,13 +174,33 @@ lbox_stat_net_index(struct lua_State *L)
 	if (iproto_rmean_foreach(seek_stat_item, L) == 0)
 		return 0;
 
+	struct iproto_request_stats rstats =
+		iproto_request_stats_get();
 	if (strcmp(key, "CONNECTIONS") == 0) {
 		lua_pushstring(L, "current");
 		lua_pushnumber(L, iproto_connection_count());
 		lua_rawset(L, -3);
+	} else if (strcmp(key, "STREAMS") == 0) {
+		lua_pushstring(L, "current");
+		lua_pushnumber(L, iproto_stream_count());
+		lua_rawset(L, -3);
 	} else if (strcmp(key, "REQUESTS") == 0) {
 		lua_pushstring(L, "current");
-		lua_pushnumber(L, iproto_request_count());
+		lua_pushnumber(L, rstats.total);
+		lua_rawset(L, -3);
+	} else if (strcmp(key, "REQUESTS_IN_PROGRESS") == 0) {
+		lua_pushstring(L, "current");
+		lua_pushnumber(L, rstats.in_progress);
+		lua_rawset(L, -3);
+
+	} else if (strcmp(key, "REQUESTS_IN_STREAM_QUEUE") == 0) {
+		lua_pushstring(L, "current");
+		lua_pushnumber(L, rstats.in_stream_queue);
+		lua_rawset(L, -3);
+
+	} else if (strcmp(key, "REQUESTS_IN_CBUS_QUEUE") == 0) {
+		lua_pushstring(L, "current");
+		lua_pushnumber(L, rstats.in_cbus_queue);
 		lua_rawset(L, -3);
 	}
 	return 1;
@@ -182,9 +211,14 @@ lbox_stat_net_index(struct lua_State *L)
  *
  * Metrics and their fields are:
  *
+ * - REQUESTS_IN_CBUS_QUEUE: total, rps, current;
  * - SENT (packets): total, rps;
  * - RECEIVED (packets): total, rps;
- * - CONNECTIONS: current.
+ * - CONNECTIONS: total, rps, current;
+ * - REQUESTS: total, rps, current;
+ * - STREAMS: total, rps, current;
+ * - REQUESTS_IN_PROGRESS: total, rps, current;
+ * - REQUESTS_IN_STREAM_QUEUE: total, rps, current.
  *
  * These fields have the following meaning:
  *
@@ -199,11 +233,16 @@ lbox_stat_net_call(struct lua_State *L)
 	lua_newtable(L);
 	iproto_rmean_foreach(set_stat_item, L);
 	inject_current_stat(L, "CONNECTIONS", iproto_connection_count());
-	inject_current_stat(L, "REQUESTS", iproto_request_count());
 	inject_current_stat(L, "STREAMS", iproto_stream_count());
+	struct iproto_request_stats rstats =
+		iproto_request_stats_get();
+	iproto_request_stats_inject(L, &rstats);
 	return 1;
 }
 
+/**
+ * Same as `lbox_stat_net_index` but for thread with given id.
+ */
 static int
 lbox_stat_net_thread_index(struct lua_State *L)
 {
@@ -216,13 +255,17 @@ lbox_stat_net_thread_index(struct lua_State *L)
 	iproto_thread_rmean_foreach(thread_id, set_stat_item, L);
 	value = iproto_thread_connection_count(thread_id);
 	inject_current_stat(L, "CONNECTIONS", value);
-	value = iproto_thread_request_count(thread_id);
-	inject_current_stat(L, "REQUESTS", value);
 	value = iproto_thread_stream_count(thread_id);
 	inject_current_stat(L, "STREAMS", value);
+	struct iproto_request_stats rstats =
+		iproto_thread_request_stats_get(thread_id);
+	iproto_request_stats_inject(L, &rstats);
 	return 1;
 }
 
+/**
+ * Same as `lbox_stat_net_call` but for thread with given id.
+ */
 static int
 lbox_stat_net_thread_call(struct lua_State *L)
 {
@@ -233,10 +276,11 @@ lbox_stat_net_thread_call(struct lua_State *L)
 		iproto_thread_rmean_foreach(thread_id, set_stat_item, L);
 		value = iproto_thread_connection_count(thread_id);
 		inject_current_stat(L, "CONNECTIONS", value);
-		value = iproto_thread_request_count(thread_id);
-		inject_current_stat(L, "REQUESTS", value);
 		value = iproto_thread_stream_count(thread_id);
 		inject_current_stat(L, "STREAMS", value);
+		struct iproto_request_stats rstats =
+			iproto_thread_request_stats_get(thread_id);
+		iproto_request_stats_inject(L, &rstats);
 		lua_rawseti(L, -2, thread_id + 1);
 	}
 	return 1;

@@ -52,12 +52,27 @@ enum {
 	 * processing stops until some new fibers are freed up.
 	 */
 	IPROTO_FIBER_POOL_SIZE_FACTOR = 5,
-	/** Maximum count of iproto threads */
+	/** Maximum count of iproto threads. */
 	IPROTO_THREADS_MAX = 1000,
 };
 
 extern unsigned iproto_readahead;
 extern int iproto_threads_count;
+
+/**
+ * Structure which contains detailed statistics
+ * about iproto requests.
+ */
+struct iproto_request_stats {
+	/** Total count of current requests. */
+	size_t total;
+	/** Count of requests currently processing in tx thread. */
+	size_t in_progress;
+	/** Count of requests currently pending in stream queue. */
+	size_t in_stream_queue;
+	/** Count of requests currently pending in cbus queue. */
+	size_t in_cbus_queue;
+};
 
 /**
  * Return size of memory used for storing network buffers.
@@ -92,17 +107,17 @@ size_t
 iproto_thread_stream_count(int thread_id);
 
 /**
- * Return the number of iproto requests in flight.
+ * Return detail statistics about iproto requests.
  */
-size_t
-iproto_request_count(void);
+struct iproto_request_stats
+iproto_request_stats_get(void);
 
 /**
- * Return the number of iproto requests in flight
- * for the thread with the given id.
+ * Return detail statistics about iproto requests
+ * for the thread with th given id.
  */
-size_t
-iproto_thread_request_count(int thread_id);
+struct iproto_request_stats
+iproto_thread_request_stats_get(int thread_id);
 
 /**
  * Reset network statistics.
