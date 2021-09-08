@@ -67,6 +67,23 @@ inject_current_stat(struct lua_State *L, const char *name, size_t val)
 	lua_pop(L, 1);
 }
 
+/**
+ * Function creates table, which contains one field `total`
+ * with given @val. Puts this table to the field @name in
+ * the table which located on the top of the lua stack.
+ */
+static void
+inject_total_stat(struct lua_State *L, const char *name, size_t val)
+{
+	lua_pushstring(L, name);
+	lua_newtable(L);
+	lua_pushstring(L, "total");
+	lua_pushnumber(L, val);
+	lua_settable(L, -3);
+	lua_settable(L, -3);
+}
+
+
 static void
 iproto_request_stats_inject(struct lua_State *L, struct iproto_request_stats *s)
 {
@@ -171,6 +188,18 @@ static int
 lbox_stat_net_index(struct lua_State *L)
 {
 	const char *key = luaL_checkstring(L, -1);
+	if (strcmp(key, "STREAM_QUEUE_MAX") == 0) {
+		struct iproto_stream_queue_stats qstats =
+			iproto_stream_queue_stats_get();
+		lua_newtable(L);
+		lua_pushstring(L, "total");
+		lua_pushnumber(L, qstats.total);
+		lua_settable(L, -3);
+		lua_pushstring(L, "current");
+		lua_pushnumber(L, qstats.current);
+		lua_settable(L, -3);
+		return 1;
+	}
 	if (iproto_rmean_foreach(seek_stat_item, L) == 0)
 		return 0;
 
@@ -216,6 +245,7 @@ lbox_stat_net_index(struct lua_State *L)
  * - RECEIVED (packets): total, rps;
  * - CONNECTIONS: total, rps, current;
  * - REQUESTS: total, rps, current;
+ * - STREAM_QUEUE_MAX: total, current;
  * - STREAMS: total, rps, current;
  * - REQUESTS_IN_PROGRESS: total, rps, current;
  * - REQUESTS_IN_STREAM_QUEUE: total, rps, current.
@@ -237,6 +267,10 @@ lbox_stat_net_call(struct lua_State *L)
 	struct iproto_request_stats rstats =
 		iproto_request_stats_get();
 	iproto_request_stats_inject(L, &rstats);
+	struct iproto_stream_queue_stats qstats =
+		iproto_stream_queue_stats_get();
+	inject_total_stat(L, "STREAM_QUEUE_MAX", qstats.total);
+	inject_current_stat(L, "STREAM_QUEUE_MAX", qstats.current);
 	return 1;
 }
 
@@ -260,6 +294,10 @@ lbox_stat_net_thread_index(struct lua_State *L)
 	struct iproto_request_stats rstats =
 		iproto_thread_request_stats_get(thread_id);
 	iproto_request_stats_inject(L, &rstats);
+	struct iproto_stream_queue_stats qstats =
+		iproto_thread_stream_queue_stats(thread_id);
+	inject_total_stat(L, "STREAM_QUEUE_MAX", qstats.total);
+	inject_current_stat(L, "STREAM_QUEUE_MAX", qstats.current);
 	return 1;
 }
 
@@ -281,6 +319,10 @@ lbox_stat_net_thread_call(struct lua_State *L)
 		struct iproto_request_stats rstats =
 			iproto_thread_request_stats_get(thread_id);
 		iproto_request_stats_inject(L, &rstats);
+		struct iproto_stream_queue_stats qstats =
+			iproto_thread_stream_queue_stats(thread_id);
+		inject_total_stat(L, "STREAM_QUEUE_MAX", qstats.total);
+		inject_current_stat(L, "STREAM_QUEUE_MAX", qstats.current);
 		lua_rawseti(L, -2, thread_id + 1);
 	}
 	return 1;

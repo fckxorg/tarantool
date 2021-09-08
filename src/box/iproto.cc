@@ -97,6 +97,12 @@ struct iproto_stream {
 	 * transaction and destroy stream object.
 	 */
 	struct cmsg on_disconnect;
+	/**
+	 * Length of queue `pending_requests` minus one.
+	 * Because first request in `pending_requests` queue
+	 * pushed to tx thread.
+	 */
+	size_t stailq_len;
 };
 
 /**
@@ -170,6 +176,8 @@ struct iproto_thread {
 	 * List of stopped connections
 	 */
 	struct rlist stopped_connections;
+	/** List of all connections */
+	struct rlist connections;
 	/*
 	 * Iproto thread stat
 	 */
@@ -189,6 +197,11 @@ struct iproto_thread {
 	size_t requests_in_progress;
 	/** Requests count currently pending in stream queue. */
 	size_t requests_in_stream_queue;
+	/**
+	 * The maximum length of the `pending_requests` queue
+	 * in the stream, for all time.
+	 */
+	size_t stream_queue_length_max;
 };
 
 static struct iproto_thread *iproto_threads;
@@ -560,6 +573,7 @@ struct iproto_connection
 	 */
 	enum iproto_connection_state state;
 	struct rlist in_stop_list;
+	struct rlist in_conn_list;
 	/**
 	 * Hash table that holds all streams for this connection.
 	 * This field is accesable only from iproto thread.
@@ -648,6 +662,7 @@ iproto_stream_new(struct iproto_connection *connection, uint64_t stream_id)
 	stailq_create(&stream->pending_requests);
 	stream->id = stream_id;
 	stream->connection = connection;
+	stream->stailq_len = 0;
 	return stream;
 }
 
@@ -685,6 +700,7 @@ static void
 iproto_stream_delete(struct iproto_stream *stream)
 {
 	assert(stailq_empty(&stream->pending_requests));
+	assert(stream->stailq_len == 0);
 	assert(stream->txn == NULL);
 	mempool_free(&stream->connection->iproto_thread->iproto_stream_pool, stream);
 }
@@ -964,13 +980,35 @@ iproto_connection_input_buffer(struct iproto_connection *con)
 	return new_ibuf;
 }
 
-
 static inline void
 iproto_stream_update_request_stats_on_start(struct iproto_stream *stream)
 {
 	struct iproto_thread *iproto_thread = stream->connection->iproto_thread;
 	iproto_thread->requests_in_stream_queue++;
 	rmean_collect(iproto_thread->rmean, REQUESTS_IN_STREAM_QUEUE, 1);
+	stream->stailq_len++;
+	iproto_thread->stream_queue_length_max =
+		MAX(iproto_thread->stream_queue_length_max, stream->stailq_len);
+}
+
+static size_t
+iproto_thread_get_current_queue_len_max(struct iproto_thread *iproto_thread)
+{
+	size_t current_queue_len_max = 0;
+	struct rlist *entry;
+	rlist_foreach(entry, &iproto_thread->connections) {
+		struct iproto_connection *con =
+			rlist_entry(entry, struct iproto_connection,
+				    in_conn_list);
+		mh_int_t node;
+		mh_foreach(con->streams, node) {
+			struct iproto_stream *stream = (struct iproto_stream *)
+				mh_i64ptr_node(con->streams, node)->val;
+			current_queue_len_max =
+				MAX(current_queue_len_max, stream->stailq_len);
+		}
+	}
+	return current_queue_len_max;
 }
 
 /**
@@ -1375,6 +1413,8 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 	con->long_poll_count = 0;
 	con->session = NULL;
 	rlist_create(&con->in_stop_list);
+	rlist_create(&con->in_conn_list);
+	rlist_add_tail(&iproto_thread->connections, &con->in_conn_list);
 	/* It may be very awkward to allocate at close. */
 	cmsg_init(&con->destroy_msg, con->iproto_thread->destroy_route);
 	cmsg_init(&con->disconnect_msg, con->iproto_thread->disconnect_route);
@@ -1405,6 +1445,7 @@ iproto_connection_delete(struct iproto_connection *con)
 	assert(con->obuf[1].pos == 0 &&
 	       con->obuf[1].iov[0].iov_base == NULL);
 
+	rlist_del(&con->in_conn_list);
 	assert(mh_size(con->streams) == 0);
 	mh_i64ptr_delete(con->streams);
 	mempool_free(&con->iproto_thread->iproto_connection_pool, con);
@@ -2285,6 +2326,7 @@ iproto_stream_update_request_stats_on_finish(struct iproto_stream *stream)
 {
 	struct iproto_connection *con = stream->connection;
 	con->iproto_thread->requests_in_stream_queue--;
+	stream->stailq_len--;
 }
 
 static void
@@ -2757,8 +2799,11 @@ iproto_thread_init(struct iproto_thread *iproto_thread)
 			  "rmean_new", "struct rmean");
 		return -1;
 	}
+	rlist_create(&iproto_thread->stopped_connections);
+	rlist_create(&iproto_thread->connections);
 	iproto_thread->requests_in_progress = 0;
 	iproto_thread->requests_in_stream_queue = 0;
+	iproto_thread->stream_queue_length_max = 0;
 	return 0;
 }
 
@@ -2799,9 +2844,6 @@ iproto_init(int threads_count)
 			goto fail;
 		}
 		/* Create a pipe to "net" thread. */
-		iproto_thread->stopped_connections =
-			RLIST_HEAD_INITIALIZER(iproto_thread->
-					       stopped_connections);
 		char endpoint_name[ENDPOINT_NAME_MAX];
 		snprintf(endpoint_name, ENDPOINT_NAME_MAX, "net%u",
 			 iproto_thread->id);
@@ -2858,6 +2900,7 @@ struct iproto_cfg_msg: public cbus_call_msg
 			size_t requests;
 			size_t streams;
 			size_t requests_in_stream_queue;
+			struct iproto_stream_queue_stats stats;
 		};
 		/** Pointer to evio_service, used for bind */
 		struct evio_service *binary;
@@ -2901,6 +2944,10 @@ iproto_fill_stat(struct iproto_thread *iproto_thread,
 		mempool_count(&iproto_thread->iproto_stream_pool);
 	cfg_msg->requests_in_stream_queue =
 		iproto_thread->requests_in_stream_queue;
+	cfg_msg->stats.current =
+		iproto_thread_get_current_queue_len_max(iproto_thread);
+	cfg_msg->stats.total =
+		iproto_thread->stream_queue_length_max;
 }
 
 static int
@@ -3093,6 +3140,30 @@ iproto_thread_request_stats_get(int thread_id)
 	stats.in_cbus_queue = stats.total - stats.in_progress -
 		stats.in_stream_queue;
 	return stats;
+}
+
+struct iproto_stream_queue_stats
+iproto_stream_queue_stats_get(void)
+{
+	struct iproto_stream_queue_stats stats = {0, 0};
+	struct iproto_cfg_msg cfg_msg;
+	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STAT);
+	for (int i = 0; i < iproto_threads_count; i++) {
+		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
+		stats.current = MAX(stats.current, cfg_msg.stats.current);
+		stats.total = MAX(stats.total, cfg_msg.stats.total);
+	}
+	return stats;
+}
+
+struct iproto_stream_queue_stats
+iproto_thread_stream_queue_stats(int thread_id)
+{
+	struct iproto_cfg_msg cfg_msg;
+	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STAT);
+	assert(thread_id >= 0 && thread_id < iproto_threads_count);
+	iproto_do_cfg(&iproto_threads[thread_id], &cfg_msg);
+	return cfg_msg.stats;
 }
 
 void

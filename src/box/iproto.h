@@ -75,6 +75,17 @@ struct iproto_request_stats {
 };
 
 /**
+ * Structure which contains statistics about the
+ * maximum length of stream queues.
+ */
+struct iproto_stream_queue_stats {
+	/** Length of the current longest stream queue */
+	size_t current;
+	/** Length of the longest stream queue for the all time */
+	size_t total;
+};
+
+/**
  * Return size of memory used for storing network buffers.
  */
 size_t
@@ -118,6 +129,18 @@ iproto_request_stats_get(void);
  */
 struct iproto_request_stats
 iproto_thread_request_stats_get(int thread_id);
+
+/**
+ *
+ */
+struct iproto_stream_queue_stats
+iproto_stream_queue_stats_get(void);
+
+/**
+ *
+ */
+struct iproto_stream_queue_stats
+iproto_thread_stream_queue_stats(int thread_id);
 
 /**
  * Reset network statistics.
