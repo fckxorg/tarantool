@@ -5,7 +5,7 @@ local test = tap.test('errno')
 local date = require('datetime')
 local ffi = require('ffi')
 
-test:plan(13)
+test:plan(16)
 
 -- minimum supported date - -5879610-06-22
 local MIN_DATE_YEAR = -5879610
@@ -25,6 +25,10 @@ local timestamp_and_ymd = 'timestamp is not allowed if year/month/day provided'
 local timestamp_and_hms = 'timestamp is not allowed if hour/min/sec provided'
 local str_or_num_exp = 'tzoffset: string or number expected, but received'
 local numeric_exp = 'numeric value expected, but received '
+local add_object_expected = ('%s - object expected'):format('datetime.add')
+local sub_object_expected = ('%s - object expected'):format('datetime.sub')
+local expected_interval_but = 'expected interval, but received'
+local expected_datetime_but = 'expected datetime or interval, but received'
 
 -- various error message generators
 local function exp_datetime(name, value)
@@ -487,6 +491,155 @@ test:test("__index functions()", function(test)
     test:is(ts.nsec, 123000000, 'ts.nsec')
     test:is(ts.usec, 123000, 'ts.usec')
     test:is(ts.msec, 123, 'ts.msec')
+end)
+
+test:test("Time interval operations", function(test)
+    test:plan(16)
+
+    -- check arithmetic with leap dates
+    local T = date.new{ year = 1972, month = 2, day = 29}
+    test:is(tostring(T:add{year = 1, month = 2}), '1973-05-01T00:00:00Z',
+            ('T:add{year=1,month=2}(%s)'):format(T))
+    test:is(tostring(T:sub{year = 2, month = 3}), '1971-02-01T00:00:00Z',
+            ('T:sub{year=2,month=3}(%s)'):format(T))
+    test:is(tostring(T:add{year = -1}), '1970-02-01T00:00:00Z',
+            ('T:add{year=-1}(%s)'):format(T))
+    test:is(tostring(T:sub{year = -1}), '1971-02-01T00:00:00Z',
+            ('T:sub{year=-1}(%s)'):format(T))
+
+    -- check average, not leap dates
+    T = date.new{year = 1970, month = 1, day = 8}
+    test:is(tostring(T:add{year = 1, month = 2}), '1971-03-08T00:00:00Z',
+            ('T:add{year=1,month=2}(%s)'):format(T))
+    test:is(tostring(T:add{week = 10}), '1971-05-17T00:00:00Z',
+            ('T:add{week=10}(%s)'):format(T))
+    test:is(tostring(T:add{day = 15}), '1971-06-01T00:00:00Z',
+            ('T:add{week=15}(%s)'):format(T))
+    test:is(tostring(T:add{hour = 2}), '1971-06-01T02:00:00Z',
+            ('T:add{hour=2}(%s)'):format(T))
+    test:is(tostring(T:add{min = 15}), '1971-06-01T02:15:00Z',
+            ('T:add{min=15}(%s)'):format(T))
+    test:is(tostring(T:add{sec = 48.123456}),
+            '1971-06-01T02:15:48.123455999Z',
+            ('T:add{sec}(%s)'):format(T))
+    test:is(tostring(T:add{nsec = 2e9}),
+            '1971-06-01T02:15:50.123455999Z',
+            ('T:add{nsec}(%s)'):format(T))
+    test:is(tostring(T:add{ hour = 12, min = 600, sec = 1024}),
+            '1971-06-02T00:32:54.123455999Z',
+            ('T:add{hour=12,min=600,sec=1024}(%s)'):format(T))
+
+    assert_raises(test, add_object_expected, function() T:add('bogus') end)
+    assert_raises(test, add_object_expected, function() T:add(123) end)
+    assert_raises(test, sub_object_expected, function() T:sub('bogus') end)
+    assert_raises(test, sub_object_expected, function() T:sub(123) end)
+end)
+
+local function catchadd(A, B)
+    return pcall(function() return A + B end)
+end
+
+--[[
+Matrix of addition operands eligibility and their result type
+
+|                 |  datetime | interval |
++-----------------+-----------+----------+
+| datetime        |           | datetime |
+| interval        |  datetime | interval |
+]]
+test:test("Matrix of allowed time and interval additions", function(test)
+    test:plan(23)
+
+    -- check arithmetic with leap dates
+    local T1970 = date.new{year = 1970, month = 1, day = 1}
+    local T2000 = date.new{year = 2000, month = 1, day = 1}
+    local I1 = date.interval.new{day = 1}
+    local M2 = date.interval.new{month = 2}
+    local M10 = date.interval.new{month = 10}
+    local Y1 = date.interval.new{year = 1}
+    local Y5 = date.interval.new{year = 5}
+
+    test:is(catchadd(T1970, I1), true, "status: T + I")
+    test:is(catchadd(T1970, M2), true, "status: T + M")
+    test:is(catchadd(T1970, Y1), true, "status: T + Y")
+    test:is(catchadd(T1970, T2000), false, "status: T + T")
+    test:is(catchadd(I1, T1970), true, "status: I + T")
+    test:is(catchadd(M2, T1970), true, "status: M + T")
+    test:is(catchadd(Y1, T1970), true, "status: Y + T")
+    test:is(catchadd(I1, Y1), true, "status: I + Y")
+    test:is(catchadd(M2, Y1), true, "status: M + Y")
+    test:is(catchadd(I1, Y1), true, "status: I + Y")
+    test:is(catchadd(Y5, M10), true, "status: Y + M")
+    test:is(catchadd(Y5, I1), true, "status: Y + I")
+    test:is(catchadd(Y5, Y1), true, "status: Y + Y")
+
+    test:is(tostring(T1970 + I1), "1970-01-02T00:00:00Z", "value: T + I")
+    test:is(tostring(T1970 + M2), "1970-03-01T00:00:00Z", "value: T + M")
+    test:is(tostring(T1970 + Y1), "1971-01-01T00:00:00Z", "value: T + Y")
+    test:is(tostring(I1 + T1970), "1970-01-02T00:00:00Z", "value: I + T")
+    test:is(tostring(M2 + T1970), "1970-03-01T00:00:00Z", "value: M + T")
+    test:is(tostring(Y1 + T1970), "1971-01-01T00:00:00Z", "value: Y + T")
+    test:is(tostring(Y5 + Y1), "+6 years", "Y + Y")
+
+    assert_raises_like(test, expected_interval_but,
+                       function() return T1970 + 123 end)
+    assert_raises_like(test, expected_interval_but,
+                       function() return T1970 + {} end)
+    assert_raises_like(test, expected_interval_but,
+                       function() return T1970 + "0" end)
+end)
+
+local function catchsub_status(A, B)
+    return pcall(function() return A - B end)
+end
+
+--[[
+Matrix of subtraction operands eligibility and their result type
+
+|                 |  datetime | interval |
++-----------------+-----------+----------+
+| datetime        |  interval | datetime |
+| interval        |           | interval |
+]]
+test:test("Matrix of allowed time and interval subtractions", function(test)
+    test:plan(21)
+
+    -- check arithmetic with leap dates
+    local T1970 = date.new{year = 1970, month = 1, day = 1}
+    local T2000 = date.new{year = 2000, month = 1, day = 1}
+    local I1 = date.interval.new{day = 1}
+    local M2 = date.interval.new{month = 2}
+    local M10 = date.interval.new{month = 10}
+    local Y1 = date.interval.new{year = 1}
+    local Y5 = date.interval.new{year = 5}
+
+    test:is(catchsub_status(T1970, I1), true, "status: T - I")
+    test:is(catchsub_status(T1970, M2), true, "status: T - M")
+    test:is(catchsub_status(T1970, Y1), true, "status: T - Y")
+    test:is(catchsub_status(T1970, T2000), true, "status: T - T")
+    test:is(catchsub_status(I1, T1970), false, "status: I - T")
+    test:is(catchsub_status(M2, T1970), false, "status: M - T")
+    test:is(catchsub_status(Y1, T1970), false, "status: Y - T")
+    test:is(catchsub_status(I1, Y1), true, "status: I - Y")
+    test:is(catchsub_status(M2, Y1), true, "status: M - Y")
+    test:is(catchsub_status(I1, Y1), true, "status: I - Y")
+    test:is(catchsub_status(Y5, M10), true, "status: Y - M")
+    test:is(catchsub_status(Y5, I1), true, "status: Y - I")
+    test:is(catchsub_status(Y5, Y1), true, "status: Y - Y")
+
+    test:is(tostring(T1970 - I1), "1969-12-31T00:00:00Z", "value: T - I")
+    test:is(tostring(T1970 - M2), "1969-11-01T00:00:00Z", "value: T - M")
+    test:is(tostring(T1970 - Y1), "1969-01-01T00:00:00Z", "value: T - Y")
+    test:is(tostring(T1970 - T2000), "-10957 days, 0 hours, 0 minutes, 0 seconds",
+            "value: T - T")
+    test:is(tostring(Y5 - Y1), "+4 years", "value: Y - Y")
+
+    assert_raises_like(test, expected_datetime_but,
+                       function() return T1970 - 123 end)
+    assert_raises_like(test, expected_datetime_but,
+                       function() return T1970 - {} end)
+    assert_raises_like(test, expected_datetime_but,
+                       function() return T1970 - "0" end)
 end)
 
 test:test("totable{}", function(test)
