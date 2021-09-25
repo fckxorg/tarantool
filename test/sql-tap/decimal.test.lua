@@ -684,7 +684,7 @@ test:do_catchsql_test(
 test:do_catchsql_test(
     "dec-11.2.4",
     [[
-        INSERT INTO tsu VALUES ('4_double', 1.5);
+        INSERT INTO tsu VALUES ('4_double', 15e-1);
     ]], {
         1, "Type mismatch: can not convert double(1.5) to uuid"
     })
@@ -819,7 +819,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "dec-14.1.3",
     [[
-        SELECT u - 0.5 FROM t2;
+        SELECT u - 5e-1 FROM t2;
     ]], {
         110.5, 3332.5, 55554.5
     })
@@ -835,7 +835,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "dec-14.1.5",
     [[
-        SELECT u / 1.0 FROM t2;
+        SELECT u / 1e0 FROM t2;
     ]], {
         111, 3333, 55555
     })
