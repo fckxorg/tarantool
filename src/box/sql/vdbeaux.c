@@ -605,6 +605,7 @@ freeP4(sql * db, int p4type, void *p4)
 			freeP4FuncCtx(db, (sql_context *) p4);
 			break;
 		}
+	case P4_DEC:
 	case P4_REAL:
 	case P4_INT64:
 	case P4_UINT64:
@@ -1093,6 +1094,10 @@ displayP4(Op * pOp, char *zTemp, int nTemp)
 		}
 	case P4_REAL:{
 			sqlXPrintf(&x, "%.16g", *pOp->p4.pReal);
+			break;
+		}
+	case P4_DEC:{
+			sqlXPrintf(&x, "%s", decimal_str(pOp->p4.dec));
 			break;
 		}
 	case P4_MEM:{
