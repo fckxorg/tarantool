@@ -281,6 +281,7 @@ macro(enable_tnt_compile_flags)
         "-Wall"
         "-Wextra"
         "-Wno-strict-aliasing"
+        "-Wno-deprecated"
     )
 
     if (ENABLE_UB_SANITIZER)
