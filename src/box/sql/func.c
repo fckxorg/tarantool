@@ -289,9 +289,9 @@ func_char_length(struct sql_context *ctx, int argc, struct Mem *argv)
 	assert(argc == 1);
 	(void)argc;
 	struct Mem *arg = &argv[0];
-	if (arg->type == MEM_TYPE_NULL)
+	if (mem_is_null(arg))
 		return;
-	assert(arg->type == MEM_TYPE_STR && arg->n >= 0);
+	assert(mem_is_str(arg) && arg->n >= 0);
 	mem_set_uint(ctx->pOut, utf8_len_str(arg->z, arg->n));
 }
 
