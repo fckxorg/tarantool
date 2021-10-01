@@ -1272,11 +1272,19 @@ zeroblobFunc(sql_context * context, int argc, sql_value ** argv)
 	n = mem_get_int_unsafe(argv[0]);
 	if (n < 0)
 		n = 0;
-	if (sql_result_zeroblob64(context, n) != 0) {
+	if (n > sql_get()->aLimit[SQL_LIMIT_LENGTH]) {
 		diag_set(ClientError, ER_SQL_EXECUTE, "string or binary string"\
 			 "is too big");
 		context->is_aborted = true;
+		return;
 	}
+	char *str = sqlDbMallocRawNN(sql_get(), n);
+	memset(str, 0, n);
+	if (str == NULL) {
+		context->is_aborted = true;
+		return;
+	}
+	mem_set_bin_allocated(context->pOut, str, n);
 }
 
 /*
