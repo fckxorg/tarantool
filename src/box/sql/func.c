@@ -536,7 +536,7 @@ func_position_octets(struct sql_context *ctx, int argc, struct Mem *argv)
 {
 	assert(argc == 2);
 	(void)argc;
-	if (mem_is_null(&argv[0]) || mem_is_null(&argv[1]))
+	if (mem_is_any_null(&argv[0], &argv[1]))
 		return;
 	assert(mem_is_bytes(&argv[0]) && mem_is_bytes(&argv[1]));
 
@@ -559,7 +559,7 @@ func_position_characters(struct sql_context *ctx, int argc, struct Mem *argv)
 {
 	assert(argc == 2);
 	(void)argc;
-	if (mem_is_null(&argv[0]) || mem_is_null(&argv[1]))
+	if (mem_is_any_null(&argv[0], &argv[1]))
 		return;
 	assert(mem_is_str(&argv[0]) && mem_is_str(&argv[1]));
 
