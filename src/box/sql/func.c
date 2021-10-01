@@ -244,7 +244,7 @@ func_abs_int(struct sql_context *ctx, int argc, struct Mem *argv)
 	assert(argc == 1);
 	(void)argc;
 	struct Mem *arg = &argv[0];
-	if (arg->type == MEM_TYPE_NULL)
+	if (mem_is_null(arg))
 		return;
 	assert(mem_is_int(arg));
 	uint64_t u = mem_is_uint(arg) ? arg->u.u : (uint64_t)-arg->u.i;
@@ -257,9 +257,9 @@ func_abs_double(struct sql_context *ctx, int argc, struct Mem *argv)
 	assert(argc == 1);
 	(void)argc;
 	struct Mem *arg = &argv[0];
-	if (arg->type == MEM_TYPE_NULL)
+	if (mem_is_null(arg))
 		return;
-	assert(arg->type == MEM_TYPE_DOUBLE);
+	assert(mem_is_double(arg));
 	mem_set_double(ctx->pOut, arg->u.r < 0 ? -arg->u.r : arg->u.r);
 }
 
