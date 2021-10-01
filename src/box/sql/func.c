@@ -263,6 +263,38 @@ func_abs_double(struct sql_context *ctx, int argc, struct Mem *argv)
 	mem_set_double(ctx->pOut, arg->u.r < 0 ? -arg->u.r : arg->u.r);
 }
 
+/** Implementation of the CHAR_LENGTH() function. */
+static inline uint8_t
+utf8_len_char(char c)
+{
+	uint8_t u = (uint8_t)c;
+	return 1 + (u >= 0xc2) + (u >= 0xe0) + (u >= 0xf0);
+}
+
+static inline uint32_t
+utf8_len_str(const char *str, uint32_t size)
+{
+	uint32_t len = 0;
+	uint32_t pos = 0;
+	while (pos < size) {
+		pos += utf8_len_char(str[pos]);
+		++len;
+	}
+	return len;
+}
+
+static void
+func_char_length(struct sql_context *ctx, int argc, struct Mem *argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	struct Mem *arg = &argv[0];
+	if (arg->type == MEM_TYPE_NULL)
+		return;
+	assert(arg->type == MEM_TYPE_STR && arg->n >= 0);
+	mem_set_uint(ctx->pOut, utf8_len_str(arg->z, arg->n));
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -1918,8 +1950,8 @@ static struct sql_func_definition definitions[] = {
 	{"AVG", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_avg, fin_avg},
 	{"AVG", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_avg, fin_avg},
 	{"CHAR", -1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_STRING, charFunc, NULL},
-	{"CHAR_LENGTH", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_INTEGER, lengthFunc,
-	 NULL},
+	{"CHAR_LENGTH", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_INTEGER,
+	 func_char_length, NULL},
 	{"COALESCE", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_SCALAR, sql_builtin_stub,
 	 NULL},
 	{"COUNT", 0, {}, FIELD_TYPE_INTEGER, step_count, fin_count},
@@ -1963,7 +1995,7 @@ static struct sql_func_definition definitions[] = {
 	{"LEAST", -1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, minmaxFunc, NULL},
 	{"LEAST", -1, {FIELD_TYPE_SCALAR}, FIELD_TYPE_SCALAR, minmaxFunc, NULL},
 
-	{"LENGTH", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_INTEGER, lengthFunc,
+	{"LENGTH", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_INTEGER, func_char_length,
 	 NULL},
 	{"LENGTH", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_INTEGER, lengthFunc,
 	 NULL},
