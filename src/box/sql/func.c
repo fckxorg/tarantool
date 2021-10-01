@@ -302,9 +302,9 @@ func_lower_upper(struct sql_context *ctx, int argc, struct Mem *argv)
 	assert(argc == 1);
 	(void)argc;
 	struct Mem *arg = &argv[0];
-	if (arg->type == MEM_TYPE_NULL)
+	if (mem_is_null(arg))
 		return;
-	assert(arg->type == MEM_TYPE_STR && arg->n >= 0);
+	assert(mem_is_str(arg) && arg->n >= 0);
 	if (arg->n == 0)
 		return mem_set_str0_static(ctx->pOut, "");
 	const char *str = arg->z;
