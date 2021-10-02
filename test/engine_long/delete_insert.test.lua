@@ -1,3 +1,5 @@
+-- tags: engine long
+
 test_run = require('test_run')
 delete_insert = require('suite').delete_insert
 inspector = test_run.new()
