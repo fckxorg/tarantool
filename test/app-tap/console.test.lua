@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local tap = require('tap')
 local console = require('console')
 local socket = require('socket')

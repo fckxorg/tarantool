@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local pwd = require("pwd")
 
 local test = require("tap").test("pwd")

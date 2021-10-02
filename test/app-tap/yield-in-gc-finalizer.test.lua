@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 if #arg == 0 then
   local tap = require('tap')
   local test = tap.test('test')

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, iconv
+
 local tap   = require('tap')
 local iconv = require('iconv')
 

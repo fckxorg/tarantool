@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, msgpack
+
 package.path = "lua/?.lua;"..package.path
 
 local tap = require('tap')

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, msgpackffi
+
 --
 -- gh-5632, gh-6050, gh-6259: Lua code should not use any global buffers or
 -- objects without proper ownership protection. Otherwise these items might be

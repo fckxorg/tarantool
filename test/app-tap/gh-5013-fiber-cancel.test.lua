@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, fiber
+
 local tap = require('tap')
 local fiber = require('fiber')
 local test = tap.test("gh-5013-fiber-cancel")

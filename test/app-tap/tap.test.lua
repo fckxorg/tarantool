@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 --
 -- Test suite for The Test Anything Protocol module implemented
 -- using module itself.

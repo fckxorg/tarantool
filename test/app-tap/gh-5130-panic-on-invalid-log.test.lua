@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local test = require('tap').test('gh-5130')
 local log = require('log')
 test:plan(3)

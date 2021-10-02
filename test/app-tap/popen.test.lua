@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, popen
+
 local popen = require('popen')
 local ffi = require('ffi')
 local errno = require('errno')

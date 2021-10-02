@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, clock
+
 local clock = require("clock")
 local test = require("tap").test("csv")
 test:plan(10)

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local tap = require('tap')
 local test = tap.test('gh-6330-table-new')
 

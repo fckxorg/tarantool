@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local tap = require('tap')
 local fiber = require('fiber')
 local buffer = require('buffer')

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local test = require('tap').test('log')
 local log = require('log')
 

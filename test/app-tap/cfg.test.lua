@@ -1,4 +1,7 @@
 #!/usr/bin/env tarantool
+
+-- tags: app
+
 local fiber = require('fiber')
 local tap = require('tap')
 local test = tap.test("cfg")

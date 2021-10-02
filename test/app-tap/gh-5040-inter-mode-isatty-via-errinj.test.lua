@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local process_timeout = require('process_timeout')
 local ffi = require('ffi')
 local tap = require('tap')

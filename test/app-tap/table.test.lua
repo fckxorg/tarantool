@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local yaml = require('yaml').new()
 yaml.cfg{
     encode_invalid_numbers = true,

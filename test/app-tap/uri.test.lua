@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, uri
+
 local tap = require('tap')
 local uri = require('uri')
 

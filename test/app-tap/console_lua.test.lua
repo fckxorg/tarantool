@@ -1,7 +1,9 @@
 #!/usr/bin/env tarantool
+
+-- tags: app
+
 --
 -- vim: ts=4 sw=4 et
-
 local console = require('console')
 local socket = require('socket')
 local tap = require('tap')

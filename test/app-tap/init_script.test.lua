@@ -1,4 +1,7 @@
 #!/usr/bin/env tarantool
+
+-- tags: app
+
 --
 -- Testing init script
 --

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local TNTBIN = 'tarantool'
 
 local ok, test_run = pcall(require, 'test_run')

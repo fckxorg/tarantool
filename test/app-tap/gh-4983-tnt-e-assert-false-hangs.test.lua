@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, ffi
+
 -- Using io.popen and self written module process_timeout
 -- in presence of the 'popen' built-in module because the
 -- last one isn't available in 1.10

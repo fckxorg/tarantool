@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, crypto
+
 local tap = require("tap")
 local ffi = require("ffi")
 local fio = require("fio")

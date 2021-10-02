@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local inspector = require('test_run').new()
 
 print('create instance')

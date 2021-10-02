@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, fiber
+
 local tap = require('tap')
 
 local test = tap.test('gh-4491-coio-wait-leads-to-segfault')

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 -- Just check whether all Lua sources related to jit.dump are
 -- bundled to the binary. Otherwise, jit.dump module raises
 -- an error that is handled via <pcall>.

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, fio
+
 local function table2str(t)
     local res = ""
     for _, line in pairs(t) do

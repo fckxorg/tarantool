@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local math = require('math')
 local fiber = require('fiber')
 local tap = require('tap')

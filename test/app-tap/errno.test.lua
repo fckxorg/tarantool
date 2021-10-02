@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, errno
+
 local tap = require('tap')
 local errno = require('errno')
 

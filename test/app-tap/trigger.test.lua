@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app
+
 local table_clear = require('table.clear')
 
 box.cfg{

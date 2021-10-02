@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, ffi
+
 local ffi = require('ffi')
 local fio = require('fio')
 

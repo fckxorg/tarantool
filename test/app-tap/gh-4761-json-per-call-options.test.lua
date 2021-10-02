@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: app, json
+
 local json = require('json')
 local tap = require('tap')
 
