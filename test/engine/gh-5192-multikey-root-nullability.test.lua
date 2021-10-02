@@ -1,3 +1,5 @@
+-- tags: engine
+
 test_run = require('test_run').new()
 
 s = box.schema.space.create('gh-5027', {engine=test_run:get_cfg('engine')})

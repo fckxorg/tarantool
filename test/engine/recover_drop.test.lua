@@ -1,3 +1,5 @@
+-- tags: engine
+
 -- recover dropped spaces
 
 env = require('test_run')

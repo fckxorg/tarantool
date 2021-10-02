@@ -1,3 +1,4 @@
+-- tags: engine
 
 -- Test for unique indices
 

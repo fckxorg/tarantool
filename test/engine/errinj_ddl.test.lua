@@ -1,3 +1,5 @@
+-- tags: engine
+
 test_run = require('test_run').new()
 fiber = require('fiber')
 engine = test_run:get_cfg('engine')

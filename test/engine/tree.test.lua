@@ -1,3 +1,5 @@
+-- tags: engine
+
 test_run = require('test_run').new()
 engine = test_run:get_cfg('engine')
 test_run:cmd("push filter '"..engine.."' to 'engine'")

@@ -1,3 +1,5 @@
+-- tags: engine
+
 env = require('test_run')
 test_run = env.new()
 test_run:cmd('create server test with script="engine/gh-5216-small_alloc_factor.lua"')

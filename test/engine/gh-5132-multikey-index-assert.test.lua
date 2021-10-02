@@ -1,3 +1,5 @@
+-- tags: engine
+
 test_run = require('test_run').new()
 
 space = box.schema.space.create('gh-5132-multikey', {engine = test_run:get_cfg('engine')})

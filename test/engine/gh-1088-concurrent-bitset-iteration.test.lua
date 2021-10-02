@@ -1,3 +1,5 @@
+-- tags: engine
+
 -- gh-1088 concurrent tuple update segfaults on BITSET_ALL_NOT_SET iteration
 
 test_run = require('test_run').new()

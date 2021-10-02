@@ -1,3 +1,5 @@
+-- tags: engine
+
 --init
 test_run = require('test_run')
 inspector = test_run.new()

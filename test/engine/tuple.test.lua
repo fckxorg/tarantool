@@ -1,3 +1,5 @@
+-- tags: engine
+
 test_run = require('test_run').new()
 engine = test_run:get_cfg('engine')
 test_run:cmd("push filter 'Failed to allocate [0-9]+' to 'Failed to allocate <NUM>'")

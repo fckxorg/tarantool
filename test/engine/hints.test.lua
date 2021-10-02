@@ -1,3 +1,5 @@
+-- tags: engine
+
 --
 -- gh-3961: Introduce tuple comparison hints
 -- We must to enshure that hints don't broke

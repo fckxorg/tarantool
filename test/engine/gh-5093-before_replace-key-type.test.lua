@@ -1,3 +1,5 @@
+-- tags: engine
+
 test_run = require('test_run').new()
 trigger = function() end
 

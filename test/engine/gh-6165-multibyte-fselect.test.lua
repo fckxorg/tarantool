@@ -1,3 +1,5 @@
+-- tags: engine
+
 -- https://github.com/tarantool/tarantool/issues/6165
 -- formatted select with multibyte characters
 inspector = require('test_run').new()
