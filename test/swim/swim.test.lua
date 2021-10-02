@@ -1,3 +1,5 @@
+-- tags: swim
+
 fiber = require('fiber')
 swim = require('swim')
 test_run = require('test_run').new()

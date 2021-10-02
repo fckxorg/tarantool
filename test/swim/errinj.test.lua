@@ -1,3 +1,5 @@
+-- tags: swim
+
 fiber = require('fiber')
 swim = require('swim')
 errinj = box.error.injection
