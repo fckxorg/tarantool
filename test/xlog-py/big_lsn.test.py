@@ -1,3 +1,5 @@
+# tags: xlog
+
 import os
 import codecs
 
