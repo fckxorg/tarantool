@@ -1,3 +1,5 @@
+# tags: replication
+
 from __future__ import print_function
 
 from lib.tarantool_server import TarantoolServer
