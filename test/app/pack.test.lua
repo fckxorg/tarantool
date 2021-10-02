@@ -1,3 +1,5 @@
+-- tags: app, pick
+
 -- Test pickle.pack()
 pickle = require('pickle')
 

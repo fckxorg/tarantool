@@ -1,3 +1,5 @@
+-- tags: app, fiber
+
 fiber = require('fiber')
 netbox = require('net.box')
 

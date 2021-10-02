@@ -1,3 +1,5 @@
+-- tags: app
+
 env = require('test_run')
 test_run = env.new()
 socket = require('socket')

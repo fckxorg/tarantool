@@ -1,3 +1,5 @@
+-- tags: app
+
 strict = require('strict')
 strict.on()
 if a then a = true end

@@ -1,3 +1,5 @@
+-- tags: app, fiber
+
 fiber = require('fiber')
 
 -- fiber.cond

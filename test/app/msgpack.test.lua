@@ -1,3 +1,5 @@
+-- tags: app, msgpack
+
 buffer = require 'buffer'
 msgpack = require 'msgpack'
 ffi = require 'ffi'

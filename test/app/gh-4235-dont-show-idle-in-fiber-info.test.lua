@@ -1,3 +1,5 @@
+-- tags: app
+
 test_run = require('test_run').new()
 netbox = require('net.box')
 fiber = require('fiber')

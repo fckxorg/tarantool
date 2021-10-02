@@ -1,3 +1,5 @@
+-- tags: app, argparse
+
 test_run = require('test_run').new()
 test_run:cmd("push filter ".."'\\.lua.*:[0-9]+: ' to '.lua:<line>\"]: '")
 argparse = require('internal.argparse').parse

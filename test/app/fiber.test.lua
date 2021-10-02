@@ -1,3 +1,5 @@
+-- tags: app
+
 fiber = require('fiber')
 space = box.schema.space.create('tweedledum')
 index = space:create_index('primary', { type = 'hash' })

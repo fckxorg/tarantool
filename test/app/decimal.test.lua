@@ -1,3 +1,5 @@
+-- tags: app, decimal
+
 decimal = require('decimal')
 test_run = require('test_run').new()
 ffi = require('ffi')

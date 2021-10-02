@@ -1,3 +1,5 @@
+-- tags: app
+
 test_run = require('test_run').new()
 fiber = require('fiber')
 fio = require('fio')

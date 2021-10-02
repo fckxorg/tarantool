@@ -1,4 +1,5 @@
---
+-- tags: app
+
 -- gh-4775: crash on option concatenated with value.
 --
 child = io.popen('tarantool -e"print(100) os.exit()"')

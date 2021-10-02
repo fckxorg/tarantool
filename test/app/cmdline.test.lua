@@ -1,3 +1,5 @@
+-- tags: app, argparse
+
 arg[-1] ~= nil
 arg[0] ~= nil
 string.match(arg[-1], '^/') ~= nil

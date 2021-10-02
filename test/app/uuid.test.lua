@@ -1,3 +1,5 @@
+-- tags: app
+
 -- box.uuid
 uuid = require('uuid')
 

@@ -1,3 +1,5 @@
+-- tags: app
+
 fio = require 'fio'
 ffi = require 'ffi'
 fiber = require 'fiber'

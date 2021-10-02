@@ -1,3 +1,5 @@
+-- tags: app
+
 os = require('os')
 test_run = require('test_run').new()
 

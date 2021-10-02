@@ -1,3 +1,5 @@
+-- tags: app, socket
+
 json = require 'json'
 yaml = require 'yaml'
 pickle = require 'pickle'
