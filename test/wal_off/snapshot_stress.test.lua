@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 -- The test emulates account system. There are increasing number or accounts
 -- and a lot of double entry transactions are made that moving random
 -- ammount from random account to another random accont.

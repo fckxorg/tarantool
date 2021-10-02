@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 session = box.session
 session.su('admin')
 env = require('test_run')

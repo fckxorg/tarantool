@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 fiber = require('fiber')
 -- test for expirationd. iterator must continue iterating after space insert/delete
 env = require('test_run')

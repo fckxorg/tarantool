@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 -- test for https://github.com/tarantool/tarantool/issues/769
 env = require('test_run')
 test_run = env.new()

@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 n_records = 10000
 n_iterations = 10000
 n_neighbors = 10

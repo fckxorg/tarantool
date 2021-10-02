@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 env = require('test_run')
 test_run = env.new()
 space = box.schema.space.create('tweedledum')

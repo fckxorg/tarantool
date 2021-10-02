@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 env = require('test_run')
 test_run = env.new()
 test_run:cmd('restart server default with cleanup=1')

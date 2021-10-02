@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 test_run = require('test_run').new()
 
 box.cfg.wal_mode

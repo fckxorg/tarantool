@@ -1,3 +1,5 @@
+-- tags: wal_off
+
 -- wal is off, good opportunity to test something more CPU intensive:
 env = require('test_run')
 test_run = env.new()
