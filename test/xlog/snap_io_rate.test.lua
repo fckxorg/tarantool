@@ -1,3 +1,5 @@
+-- tags: xlog
+
 digest = require'digest'
 fiber = require'fiber'
 

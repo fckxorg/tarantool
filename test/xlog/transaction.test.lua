@@ -1,3 +1,5 @@
+-- tags: xlog
+
 fio = require('fio')
 xlog = require('xlog').pairs
 env = require('test_run')

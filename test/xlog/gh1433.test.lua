@@ -1,3 +1,5 @@
+-- tags: xlog
+
 fio = require('fio')
 box.space._schema:insert({'gh1433'})
 box.space._schema:delete({'gh1433'})

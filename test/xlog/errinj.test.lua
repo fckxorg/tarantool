@@ -1,3 +1,4 @@
+-- tags: xlog
 --
 -- we actually need to know what xlogs the server creates,
 -- so start from a clean state

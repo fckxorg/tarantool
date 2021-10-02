@@ -1,3 +1,5 @@
+-- tags: xlog
+
 fio = require 'fio'
 errno = require 'errno'
 fiber = require 'fiber'

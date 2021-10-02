@@ -1,3 +1,5 @@
+-- tags: xlog
+
 env = require('test_run').new()
 digest = require('digest')
 

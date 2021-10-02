@@ -1,3 +1,5 @@
+-- tags: xlog
+
 test_run = require('test_run').new()
 
 -- Upgrade from 1.6.8.

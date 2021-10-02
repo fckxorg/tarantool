@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: xlog
+
 env = require('test_run')
 test_run = env.new()
 

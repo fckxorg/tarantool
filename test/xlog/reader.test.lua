@@ -1,3 +1,5 @@
+-- tags: xlog
+
 -- test for xlog_reader module
 -- consists of 3 parts:
 -- 1) ok snap/xlog reader

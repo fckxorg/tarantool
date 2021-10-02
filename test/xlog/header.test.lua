@@ -1,3 +1,5 @@
+-- tags: xlog
+
 test_run = require('test_run').new()
 test_run:cmd('restart server default with cleanup=1')
 

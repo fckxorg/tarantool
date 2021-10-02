@@ -1,3 +1,5 @@
+-- tags: xlog
+
 test_run = require('test_run').new()
 fiber = require('fiber')
 digest = require('digest')

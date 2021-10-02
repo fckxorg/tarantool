@@ -1,3 +1,5 @@
+-- tags: xlog
+
 -- Issue 3105: Test logging of request with broken lsn before panicking
 -- Two cases are covered: Recovery and Joining a new replica
 env = require('test_run')

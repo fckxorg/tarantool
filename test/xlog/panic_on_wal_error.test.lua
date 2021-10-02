@@ -1,3 +1,5 @@
+-- tags: xlog
+
 -- preparatory stuff
 env = require('test_run')
 test_run = env.new()

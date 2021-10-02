@@ -1,3 +1,5 @@
+-- tags: xlog
+
 test_run = require('test_run').new()
 
 test_run:cmd('create server upgrade with script="xlog/upgrade.lua", '..		\
