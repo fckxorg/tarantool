@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 --
 -- 1. Create a space which has more indexes that can be scheduled
 --    for dump simultaneously (> vinyl_write_threads).

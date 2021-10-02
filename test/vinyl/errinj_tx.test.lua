@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 fiber = require('fiber')
 txn_proxy = require('txn_proxy')

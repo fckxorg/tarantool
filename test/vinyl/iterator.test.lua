@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 --
 -- Verify that the iterator uses the state of the space before the iterator
 -- was created.

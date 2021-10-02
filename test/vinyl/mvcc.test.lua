@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 -- need to restart in order to reset box.stat.vinyl() stats
 test_run:cmd("restart server default")

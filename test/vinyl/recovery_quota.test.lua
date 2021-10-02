@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 
 -- Upon start the test server creates a space and populates it with

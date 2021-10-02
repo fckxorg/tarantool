@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 fiber = require('fiber')
 env = require('test_run')
 test_run = env.new()

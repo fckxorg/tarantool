@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 
 -- Upsert's internal format have changed: now update operations are stored

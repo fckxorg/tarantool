@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 -- The test runs loop of given number of rounds.
 -- Every round does the following:
 -- The test starts several concurrent transactions in vinyl.

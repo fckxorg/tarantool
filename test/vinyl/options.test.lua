@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 utils = require('utils')
 test_run = require('test_run').new()
 

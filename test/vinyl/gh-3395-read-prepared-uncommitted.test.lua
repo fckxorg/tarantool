@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 -- Let's test following case: right before data selection tuple is
 -- inserted into space. It passes first stage of commit procedure,
 -- i.e. it is prepared to be committed but still not yet reached WAL.

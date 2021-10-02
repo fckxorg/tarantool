@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 --
 -- hermitage: Testing transaction isolation levels.
 -- github.com/ept/hermitage

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: vinyl
+
 test_run = require('test_run').new()
 
 require('stress').stress(10)

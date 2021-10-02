@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 --
 -- Basic test for transaction throttling.
 --

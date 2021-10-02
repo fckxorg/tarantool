@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 
 -- Since we store LSNs in data files, the data size may differ

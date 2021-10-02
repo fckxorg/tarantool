@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 errinj = box.error.injection
 fiber = require('fiber')
 

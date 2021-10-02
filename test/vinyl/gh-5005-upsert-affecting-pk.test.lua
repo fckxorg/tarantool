@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 -- Make sure that applying invalid upsert (which modifies PK)
 -- after read (so that key populates tuple cache) does not result
 -- in crash.

@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 
 test_run:cmd("setopt delimiter ';'")

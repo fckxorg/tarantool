@@ -1,3 +1,4 @@
+-- tags: vinyl
 
 -- key type validations (str, num)
 space = box.schema.space.create('test', { engine = 'vinyl' })

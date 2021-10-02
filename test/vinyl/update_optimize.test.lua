@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 -- Restart the server to finish all snaphsots from prior tests.
 test_run:cmd('restart server default')

@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 test_run = require('test_run').new()
 
 -- Test scenario is following. We have space filled with data in L0.

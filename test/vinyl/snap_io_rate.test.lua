@@ -1,3 +1,5 @@
+-- tags: vinyl
+
 fiber = require('fiber')
 digest = require('digest')
 test_run = require('test_run').new()
