@@ -1,5 +1,7 @@
 #! /usr/bin/env tarantool
 
+-- tags: box
+
 local netbox = require('net.box')
 local os = require('os')
 local tap = require('tap')

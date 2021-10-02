@@ -1,4 +1,7 @@
 #!/usr/bin/env tarantool
+
+-- tags: box
+
 local tap = require('tap')
 local fiber = require('fiber')
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local tap = require('tap')
 local key_def_lib = require('key_def')
 local merger = require('merger')

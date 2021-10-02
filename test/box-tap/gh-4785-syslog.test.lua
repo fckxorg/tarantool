@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local socket = require('socket')
 local log = require('log')
 local fio = require('fio')

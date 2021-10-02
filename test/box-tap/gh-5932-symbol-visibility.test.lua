@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local ffi = require('ffi')
 local tap = require('tap')
 local test = tap.test('test hide symbols')

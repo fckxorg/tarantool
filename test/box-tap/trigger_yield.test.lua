@@ -1,4 +1,7 @@
 #!/usr/bin/env tarantool
+
+-- tags: box
+
 box.cfg{
     pid_file = "box.pid",
     memtx_memory = 104857600,

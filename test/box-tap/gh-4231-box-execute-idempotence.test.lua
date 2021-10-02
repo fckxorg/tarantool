@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- gh-4231: box.execute should be an idempotent function meaning
 -- its effect should be the same if the user chooses to save it

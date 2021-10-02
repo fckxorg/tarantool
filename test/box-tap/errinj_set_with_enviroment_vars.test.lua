@@ -1,4 +1,7 @@
 #!/usr/bin/env tarantool
+
+-- tags: box
+
 local fio = require('fio')
 
 -- Execute errinj_set_with_enviroment_vars_script.lua

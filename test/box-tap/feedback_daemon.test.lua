@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 -- Testing feedback module
 
 local tap = require('tap')

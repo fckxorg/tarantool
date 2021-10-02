@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- gh-4688: box.info:memory() displayed full content of box.info
 --

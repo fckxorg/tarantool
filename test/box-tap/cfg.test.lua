@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local tap = require('tap')
 local test = tap.test('cfg')
 local socket = require('socket')

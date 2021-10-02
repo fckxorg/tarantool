@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 -- The issue (gh-5388) is about a leak of the tuple, serialized
 -- from a given key in the key_def:compare_with_key(tuple, key)
 -- method.

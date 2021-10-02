@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local os = require('os')
 local fio = require('fio')
 local tap = require('tap')

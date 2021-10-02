@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 -- gh-4231: run box_load_and_execute() (it is box.execute value
 -- before box will be loaded) in several fibers in parallel and
 -- ensure that it returns correct results (i.e. that the function

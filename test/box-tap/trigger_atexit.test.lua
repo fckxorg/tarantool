@@ -1,4 +1,7 @@
 #!/usr/bin/env tarantool
+
+-- tags: box
+
 -- vim: set ft=lua :
 
 -- see https://github.com/tarantool/tarantool/issues/583

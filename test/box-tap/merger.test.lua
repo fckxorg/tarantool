@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local tap = require('tap')
 local buffer = require('buffer')
 local msgpackffi = require('msgpackffi')

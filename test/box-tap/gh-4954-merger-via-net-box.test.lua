@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local merger_lib = require('merger')
 local buffer = require('buffer')
 local msgpack = require('msgpack')

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local tap = require('tap')
 local ffi = require('ffi')
 ffi.cdef([[

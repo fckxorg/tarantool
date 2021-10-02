@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 local session = box.session
 local fiber = require('fiber')
 local tap = require('tap')

@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- gh-4954: The fiber-local Lua stack should be even after
 -- merge_source_next() call from C code.

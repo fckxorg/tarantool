@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- Test that disabling feedback in initial configuration doesn't lead to
 -- "attempt to index field 'cached_events' (a nil value)" errors when creating

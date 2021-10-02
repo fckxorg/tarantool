@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- gh-3159: test on_schema_init trigger
 --

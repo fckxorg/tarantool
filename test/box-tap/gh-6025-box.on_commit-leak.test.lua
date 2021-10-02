@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- gh-6025: box.on_commit() and box.on_rollback() triggers always leaked.
 --

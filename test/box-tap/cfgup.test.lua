@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 -- Testing configuration updates
 
 local tap = require('tap')

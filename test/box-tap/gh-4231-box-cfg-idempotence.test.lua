@@ -1,5 +1,7 @@
 #!/usr/bin/env tarantool
 
+-- tags: box
+
 --
 -- gh-4231: box.cfg is another function (so called <load_cfg>)
 -- before box is loaded. Usually a user calls box.cfg({<...>}),
