@@ -1,3 +1,5 @@
+# tags: box
+
 server.admin("box.internal.bootstrap()")
 server.admin("box.space._schema:select{}")
 server.admin("box.space._cluster:select{}")

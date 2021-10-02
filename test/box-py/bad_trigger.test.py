@@ -1,3 +1,5 @@
+# tags: box
+
 from __future__ import print_function
 
 from lib.box_connection import BoxConnection
