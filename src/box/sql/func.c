@@ -738,6 +738,45 @@ func_substr_characters(struct sql_context *ctx, int argc, struct Mem *argv)
 		ctx->is_aborted = true;
 }
 
+/** Implementation of the CHAR() function. */
+static void
+func_char(struct sql_context *ctx, int argc, struct Mem *argv)
+{
+	if (argc == 0)
+		return mem_set_str_static(ctx->pOut, "", 0);
+	char *str = sqlDbMallocRawNN(sql_get(), argc * 4);
+	if (str == NULL) {
+		ctx->is_aborted = true;
+		return;
+	}
+	uint8_t *ptr = (uint8_t *)str;
+	for (int i = 0; i < argc; ++i) {
+		uint32_t c;
+		if (mem_is_null(&argv[i]))
+			c = 0;
+		else if (!mem_is_uint(&argv[i]) || argv[i].u.u > 0x10ffff)
+			c = 0xfffd;
+		else
+			c = argv[i].u.u;
+		if (c < 0x80) {
+			*ptr++ = c & 0xFF;
+		} else if (c < 0x0800) {
+			*ptr++ = 0xC0 + ((c >> 6) & 0x1F);
+			*ptr++ = 0x80 + (c & 0x3F);
+		} else if (c < 0x10000) {
+			*ptr++ = 0xE0 + ((c >> 12) & 0x0F);
+			*ptr++ = 0x80 + ((c >> 6) & 0x3F);
+			*ptr++ = 0x80 + (c & 0x3F);
+		} else {
+			*ptr++ = 0xF0 + ((c >> 18) & 0x07);
+			*ptr++ = 0x80 + ((c >> 12) & 0x3F);
+			*ptr++ = 0x80 + ((c >> 6) & 0x3F);
+			*ptr++ = 0x80 + (c & 0x3F);
+		}
+	}
+	mem_set_str_allocated(ctx->pOut, str, (char *)ptr - str);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -1470,50 +1509,6 @@ unicodeFunc(struct sql_context *context, int argc, struct Mem *argv)
 }
 
 /*
- * The char() function takes zero or more arguments, each of which is
- * an integer.  It constructs a string where each character of the string
- * is the unicode character for the corresponding integer argument.
- */
-static void
-charFunc(struct sql_context *context, int argc, struct Mem *argv)
-{
-	unsigned char *z, *zOut;
-	int i;
-	zOut = z = sql_malloc64(argc * 4 + 1);
-	if (z == NULL) {
-		context->is_aborted = true;
-		return;
-	}
-	for (i = 0; i < argc; i++) {
-		uint64_t x;
-		unsigned c;
-		if (sql_value_type(&argv[i]) == MP_INT)
-			x = 0xfffd;
-		else
-			x = mem_get_uint_unsafe(&argv[i]);
-		if (x > 0x10ffff)
-			x = 0xfffd;
-		c = (unsigned)(x & 0x1fffff);
-		if (c < 0x00080) {
-			*zOut++ = (u8) (c & 0xFF);
-		} else if (c < 0x00800) {
-			*zOut++ = 0xC0 + (u8) ((c >> 6) & 0x1F);
-			*zOut++ = 0x80 + (u8) (c & 0x3F);
-		} else if (c < 0x10000) {
-			*zOut++ = 0xE0 + (u8) ((c >> 12) & 0x0F);
-			*zOut++ = 0x80 + (u8) ((c >> 6) & 0x3F);
-			*zOut++ = 0x80 + (u8) (c & 0x3F);
-		} else {
-			*zOut++ = 0xF0 + (u8) ((c >> 18) & 0x07);
-			*zOut++ = 0x80 + (u8) ((c >> 12) & 0x3F);
-			*zOut++ = 0x80 + (u8) ((c >> 6) & 0x3F);
-			*zOut++ = 0x80 + (u8) (c & 0x3F);
-		}
-	}
-	sql_result_text64(context, (char *)z, zOut - z, sql_free);
-}
-
-/*
  * The hex() function.  Interpret the argument as a blob.  Return
  * a hexadecimal rendering as text.
  */
@@ -1865,7 +1860,7 @@ static struct sql_func_definition definitions[] = {
 	 NULL},
 	{"AVG", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_avg, fin_avg},
 	{"AVG", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_avg, fin_avg},
-	{"CHAR", -1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_STRING, charFunc, NULL},
+	{"CHAR", -1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_STRING, func_char, NULL},
 	{"CHAR_LENGTH", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_INTEGER,
 	 func_char_length, NULL},
 	{"COALESCE", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_SCALAR, sql_builtin_stub,
