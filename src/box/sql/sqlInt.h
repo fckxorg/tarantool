@@ -355,45 +355,6 @@ sql_stricmp(const char *, const char *);
 int
 sql_strnicmp(const char *, const char *, int);
 
-sql *
-sql_context_db_handle(sql_context *);
-
-
-void
-sql_result_blob(sql_context *, const void *,
-		    int, void (*)(void *));
-
-void
-sql_result_blob64(sql_context *, const void *,
-		      sql_uint64, void (*)(void *));
-
-void
-sql_result_double(sql_context *, double);
-
-void
-sql_result_uint(sql_context *ctx, uint64_t u_val);
-
-void
-sql_result_int(sql_context *ctx, int64_t val);
-
-void
-sql_result_bool(struct sql_context *ctx, bool value);
-
-void
-sql_result_null(sql_context *);
-
-void
-sql_result_text(sql_context *, const char *,
-		    int, void (*)(void *));
-
-void
-sql_result_text64(sql_context *, const char *,
-		      sql_uint64, void (*)(void *));
-
-void
-sql_result_value(sql_context *,
-		     sql_value *);
-
 char *
 sql_mprintf(const char *, ...);
 char *
@@ -568,14 +529,6 @@ void
 sql_unbind(struct sql_stmt *stmt);
 
 int
-sql_bind_blob(sql_stmt *, int, const void *,
-		  int n, void (*)(void *));
-
-int
-sql_bind_blob64(sql_stmt *, int, const void *,
-		    sql_uint64, void (*)(void *));
-
-int
 sql_bind_double(sql_stmt *, int, double);
 
 /**
@@ -602,8 +555,10 @@ int
 sql_bind_null(sql_stmt *, int);
 
 int
-sql_bind_text64(sql_stmt *, int, const char *,
-		    sql_uint64, void (*)(void *));
+sql_bind_str_static(sql_stmt *stmt, int i, const char *str, uint32_t len);
+
+int
+sql_bind_bin_static(sql_stmt *stmt, int i, const char *str, uint32_t size);
 
 int
 sql_bind_uuid(struct sql_stmt *stmt, int i, const struct tt_uuid *uuid);
