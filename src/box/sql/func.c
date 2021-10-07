@@ -1282,7 +1282,6 @@ likeFunc(sql_context *context, int argc, struct Mem *argv)
 	u32 escape = SQL_END_OF_STRING;
 	int nPat;
 	assert(argc == 2 || argc == 3);
-	struct sql *db = sql_context_db_handle(context);
 	if (mem_is_any_null(&argv[0], &argv[1]))
 		return;
 	assert(mem_is_str(&argv[0]) && mem_is_str(&argv[1]));
@@ -1297,7 +1296,7 @@ likeFunc(sql_context *context, int argc, struct Mem *argv)
 	 * sql_utf8_pattern_compare().
 	 */
 	nPat = argv[0].n;
-	if (nPat > db->aLimit[SQL_LIMIT_LIKE_PATTERN_LENGTH]) {
+	if (nPat > sql_get()->aLimit[SQL_LIMIT_LIKE_PATTERN_LENGTH]) {
 		diag_set(ClientError, ER_SQL_EXECUTE, "LIKE pattern is too "\
 			 "complex");
 		context->is_aborted = true;
@@ -1334,7 +1333,7 @@ likeFunc(sql_context *context, int argc, struct Mem *argv)
 		context->is_aborted = true;
 		return;
 	}
-	sql_result_bool(context, res == MATCH);
+	mem_set_bool(context->pOut, res == MATCH);
 }
 
 /**
