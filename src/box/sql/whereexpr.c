@@ -268,7 +268,7 @@ like_optimization_is_valid(Parse *pParse, Expr *pExpr, Expr **ppPrefix,
 	int cnt;
 	/* Database connection. */
 	sql *db = pParse->db;
-	sql_value *pVal = 0;
+	const struct Mem *var = NULL;
 	/* Opcode of pRight. */
 	int op;
 	/* Result code to return. */
@@ -307,12 +307,18 @@ like_optimization_is_valid(Parse *pParse, Expr *pExpr, Expr **ppPrefix,
 
 	op = pRight->op;
 	if (op == TK_VARIABLE) {
-		Vdbe *pReprepare = pParse->pReprepare;
-		int iCol = pRight->iColumn;
-		pVal = sqlVdbeGetBoundValue(pReprepare, iCol);
-		if (pVal != NULL && mem_is_str(pVal)) {
-			if (mem_as_str0(pVal) == NULL)
+		var = vdbe_get_bound_value(pParse->pReprepare,
+					   pRight->iColumn - 1);
+		if (var != NULL && mem_is_str(var)) {
+			uint32_t size = var->n + 1;
+			char *str = region_alloc(&fiber()->gc, size);
+			if (str == NULL) {
+				diag_set(OutOfMemory, size, "region", "str");
 				return -1;
+			}
+			memcpy(str, var->z, var->n);
+			str[var->n] = '\0';
+			z = str;
 		}
 		assert(pRight->op == TK_VARIABLE || pRight->op == TK_REGISTER);
 	} else if (op == TK_STRING) {
@@ -357,7 +363,6 @@ like_optimization_is_valid(Parse *pParse, Expr *pExpr, Expr **ppPrefix,
 	}
 
 	rc = (z != 0);
-	sqlValueFree(pVal);
 	return rc;
 }
 

@@ -160,8 +160,22 @@ getTextArg(PrintfArguments * p)
 {
 	if (p->nArg <= p->nUsed)
 		return 0;
-	struct Mem *mem = p->apArg[p->nUsed++];
-	return (char *)mem_as_str0(mem);
+	struct Mem mem;
+	mem_create(&mem);
+	mem_copy(&mem, p->apArg[p->nUsed++]);
+	if (mem_to_str(&mem) != 0) {
+		mem_destroy(&mem);
+		return NULL;
+	}
+	char *str = region_alloc(&fiber()->gc, mem.n + 1);
+	if (str == NULL) {
+		diag_set(OutOfMemory, mem.n + 1, "region", "str");
+		return NULL;
+	}
+	memcpy(str, mem.z, mem.n);
+	str[mem.n] = '\0';
+	mem_destroy(&mem);
+	return str;
 }
 
 /*
