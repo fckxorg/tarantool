@@ -143,7 +143,7 @@ local module_cfg_type = {
 -- forget to update it when add a new type or a combination of
 -- types here.
 local template_cfg = {
-    listen              = box.internal.cfg_get_listen_type(),
+    listen              = "string, number",
     memtx_memory        = 'number',
     strip_core          = 'boolean',
     memtx_min_tuple_size  = 'number',
@@ -905,3 +905,8 @@ box.internal.cfg = setmetatable({}, {
 -- package.cpath = package.cpath:gsub(
 --     '?.so', '?.' .. format
 -- ):gsub('loadall.so', 'loadall.' .. format)
+
+box.internal.cfg_get_listen = function() return box.cfg.listen end
+box.internal.change_template_cfg = function(key, val)
+    template_cfg[key] = val
+end

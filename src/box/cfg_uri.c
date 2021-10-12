@@ -28,7 +28,7 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "cfg_uri.h"
+#include "tarantool_ee.h"
 #include "tt_static.h"
 #include "lua/utils.h"
 #include "diag.h"
@@ -54,22 +54,24 @@ cfg_get_uri_array(struct lua_State *L, const char *param)
 }
 
 
-struct cfg_uri_array *
-cfg_uri_array_new(size_t *size)
+static struct cfg_uri_array *
+cfg_uri_array_new_impl(size_t *size)
 {
 	*size = sizeof(struct cfg_uri_array);
 	return calloc(1, sizeof(struct cfg_uri_array));
 }
+cfg_uri_array_new_ptr cfg_uri_array_new = cfg_uri_array_new_impl;
 
-void
-cfg_uri_array_delete(struct cfg_uri_array *uri_array)
+static void
+cfg_uri_array_delete_impl(struct cfg_uri_array *uri_array)
 {
 	free(uri_array);
 }
+cfg_uri_array_delete_ptr cfg_uri_array_delete = cfg_uri_array_delete_impl;
 
-int
-cfg_uri_array_create(lua_State *L, const char *option_name,
-		     struct cfg_uri_array *uri_array)
+static int
+cfg_uri_array_create_impl(lua_State *L, const char *option_name,
+			  struct cfg_uri_array *uri_array)
 {
 	memset(uri_array, 0, sizeof(*uri_array));
 	cfg_get_uri_array(L, option_name);
@@ -87,31 +89,36 @@ cfg_uri_array_create(lua_State *L, const char *option_name,
 	lua_pop(L, 1);
 	return 0;
 }
+cfg_uri_array_create_ptr cfg_uri_array_create = cfg_uri_array_create_impl;
 
-void
-cfg_uri_array_destroy(struct cfg_uri_array *uri_array)
+static void
+cfg_uri_array_destroy_impl(struct cfg_uri_array *uri_array)
 {
 	(void)uri_array;
 }
+cfg_uri_array_destroy_ptr cfg_uri_array_destroy = cfg_uri_array_destroy_impl;
 
-int
-cfg_uri_array_size(const struct cfg_uri_array *uri_array)
+static int
+cfg_uri_array_size_impl(const struct cfg_uri_array *uri_array)
 {
 	return uri_array->size;
 }
+cfg_uri_array_size_ptr cfg_uri_array_size = cfg_uri_array_size_impl;
 
-const char *
-cfg_uri_array_get_uri(const struct cfg_uri_array *uri_array, int idx)
+static const char *
+cfg_uri_array_get_uri_impl(const struct cfg_uri_array *uri_array, int idx)
 {
 	assert(idx < uri_array->size);
 	(void)idx;
 	return uri_array->uri;
 }
+cfg_uri_array_get_uri_ptr cfg_uri_array_get_uri = cfg_uri_array_get_uri_impl;
 
-int
-cfg_uri_array_check(const struct cfg_uri_array *uri_array,
-		    cfg_uri_array_checker checker,
-		    const char *option_name)
+static int
+cfg_uri_array_check_impl(const struct cfg_uri_array *uri_array,
+			 cfg_uri_array_checker checker,
+			 const char *option_name)
 {
 	return checker(uri_array->uri, option_name);
 }
+cfg_uri_array_check_ptr cfg_uri_array_check = cfg_uri_array_check_impl;

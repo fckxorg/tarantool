@@ -27,7 +27,6 @@ bin_source(bin_sources bootstrap.snap bootstrap.h)
 set(listen_sources
     cfg_uri.c
     iproto_service.c)
-lua_source(lua_sources lua/normalize_uri.lua)
 
 set(sql_sources
     sql/opcodes.c

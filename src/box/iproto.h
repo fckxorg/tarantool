@@ -35,7 +35,7 @@
 #include <stdint.h>
 
 #include "sio.h"
-#include "cfg_uri.h"
+#include "tarantool_ee.h"
 
 #if defined(__cplusplus)
 extern "C" {

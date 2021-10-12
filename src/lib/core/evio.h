@@ -135,6 +135,21 @@ evio_service_detach(struct evio_service *service);
 void
 evio_service_stop(struct evio_service *service);
 
+void
+evio_service_attach(struct evio_service *dst, const struct evio_service *src);
+
+struct evio_service *
+evio_service_alloc(size_t count);
+
+int
+evio_service_bound_address(char *buf, struct evio_service *service);
+
+bool
+evio_service_is_active(struct evio_service *service);
+
+struct evio_service *
+evio_service_by_index(struct evio_service *service, int idx);
+
 /** \endcond public */
 
 int
@@ -142,14 +157,6 @@ evio_socket(struct ev_io *coio, int domain, int type, int protocol);
 
 void
 evio_close(struct ev_loop *loop, struct ev_io *evio);
-
-/** \endcond public */
-
-static inline bool
-evio_service_is_active(struct evio_service *service)
-{
-	return service->ev.fd >= 0;
-}
 
 static inline bool
 evio_has_fd(struct ev_io *ev)

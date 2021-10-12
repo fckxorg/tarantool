@@ -28,7 +28,7 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "iproto_service.h"
+#include "tarantool_ee.h"
 #include "tt_static.h"
 #include "lua/utils.h"
 #include "diag.h"
@@ -37,89 +37,109 @@
 #include "trivia/util.h"
 #include "fiber.h"
 
-struct iproto_service_array {
-	struct evio_service service;
-};
-
-struct iproto_service_array *
-iproto_service_array_new(size_t *size)
+static struct evio_service *
+iproto_service_array_new_impl(size_t *count)
 {
-	*size = sizeof(struct iproto_service_array);
-	return (struct iproto_service_array *)
-		calloc(1, sizeof(struct iproto_service_array));
+	*count = 1;
+	return evio_service_alloc(1);
 }
+iproto_service_array_new_ptr iproto_service_array_new =
+	iproto_service_array_new_impl;
 
-void
-iproto_service_array_delete(struct iproto_service_array *array)
+static void
+iproto_service_array_delete_impl(struct evio_service *array)
 {
 	free(array);
 }
+iproto_service_array_delete_ptr iproto_service_array_delete =
+	iproto_service_array_delete_impl;
 
-void
-iproto_service_array_init(struct iproto_service_array *array,
-			  struct ev_loop *loop, evio_accept_f on_accept,
-			  void *on_accept_param)
+static void
+iproto_service_array_init_impl(struct evio_service *array, size_t *size,
+			       struct ev_loop *loop, evio_accept_f on_accept,
+			       void *on_accept_param)
 {
-	evio_service_init(loop, &array->service, "service",
-			  on_accept, on_accept_param);
+	evio_service_init(loop, array, "service", on_accept, on_accept_param);
+	*size = 0;
 }
+iproto_service_array_init_ptr iproto_service_array_init =
+	iproto_service_array_init_impl;
 
-const char *
-iproto_service_array_fill_listen_info(struct iproto_service_array *array,
-				      char *buf)
+static const char *
+iproto_service_array_fill_listen_info_impl(struct evio_service *array,
+					   size_t size, char *buf)
 {
-	if (array->service.addr_len == 0)
+	(void)size;
+	if (array->addr_len == 0)
 		return NULL;
-	sio_addr_snprintf(buf, SERVICE_NAME_MAXLEN,
-			  (struct sockaddr *)&array->service.addrstorage,
-			  array->service.addr_len);
+	evio_service_bound_address(buf, array);
 	return buf;
 }
+iproto_service_array_fill_listen_info_ptr
+	iproto_service_array_fill_listen_info =
+	iproto_service_array_fill_listen_info_impl;
 
-void
-iproto_service_array_attach(struct iproto_service_array *dst,
-			    const struct iproto_service_array *src)
+static void
+iproto_service_array_attach_impl(struct evio_service *dst, size_t *dst_size,
+				 const struct evio_service *src,
+				 size_t src_size)
 {
-	strcpy(dst->service.host, src->service.host);
-	strcpy(dst->service.serv, src->service.serv);
-	dst->service.addrstorage = src->service.addrstorage;
-	dst->service.addr_len = src->service.addr_len;
-	ev_io_set(&dst->service.ev, src->service.ev.fd, EV_READ);
+	assert(src_size == 1);
+	evio_service_attach(dst, src);
+	*dst_size = src_size;
 }
+iproto_service_array_attach_ptr iproto_service_array_attach =
+	iproto_service_array_attach_impl;
 
-void
-iproto_service_array_detach(struct iproto_service_array *array)
+static void
+iproto_service_array_detach_impl(struct evio_service *array, size_t *size)
 {
-	evio_service_detach(&array->service);
+	if (*size != 0) {
+		evio_service_detach(array);
+		*size = 0;
+	}
 }
+iproto_service_array_detach_ptr iproto_service_array_detach =
+	iproto_service_array_detach_impl;
 
-int
-iproto_service_array_check_listen(struct iproto_service_array *array)
+static int
+iproto_service_array_check_listen_impl(struct evio_service *array, size_t size)
 {
-	if (evio_service_is_active(&array->service))
+	if (size != 0 && evio_service_is_active(array))
 		return -1;
 	return 0;
 }
+iproto_service_array_check_listen_ptr iproto_service_array_check_listen =
+	iproto_service_array_check_listen_impl;
 
-int
-iproto_service_array_start_listen(struct iproto_service_array *array)
+static int
+iproto_service_array_start_listen_impl(struct evio_service *array, size_t size)
 {
-	if (evio_service_listen(&array->service) != 0)
+	if (size != 0 && evio_service_listen(array) != 0)
 		return -1;
 	return 0;
 }
+iproto_service_array_start_listen_ptr iproto_service_array_start_listen =
+	iproto_service_array_start_listen_impl;
 
-void
-iproto_service_array_stop_listen(struct iproto_service_array *array)
+static void
+iproto_service_array_stop_listen_impl(struct evio_service *array, size_t *size)
 {
-	evio_service_stop(&array->service);
+	if (*size != 0) {
+		evio_service_stop(array);
+		*size = 0;
+	}
 }
+iproto_service_array_stop_listen_ptr iproto_service_array_stop_listen =
+	iproto_service_array_stop_listen_impl;
 
-int
-iproto_service_array_bind(struct iproto_service_array *array,
-			  const struct cfg_uri_array *uri_array)
+static int
+iproto_service_array_bind_impl(struct evio_service *array, size_t *size,
+			       const struct cfg_uri_array *uri_array)
 {
 	assert(cfg_uri_array_size(uri_array) == 1);
-	return evio_service_bind(&array->service,
-				 cfg_uri_array_get_uri(uri_array, 0));
+	*size = cfg_uri_array_size(uri_array);
+	return evio_service_bind(array, cfg_uri_array_get_uri(uri_array, 0));
 }
+iproto_service_array_bind_ptr iproto_service_array_bind =
+	iproto_service_array_bind_impl;
