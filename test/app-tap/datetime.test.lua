@@ -5,7 +5,7 @@ local test = tap.test('errno')
 local date = require('datetime')
 local ffi = require('ffi')
 
-test:plan(13)
+test:plan(14)
 
 -- minimum supported date - -5879610-06-22
 local MIN_DATE_YEAR = -5879610
@@ -370,6 +370,30 @@ test:test("Datetime string formatting", function(test)
     test:is(t:format(), '1970-01-01T00:00:00Z', 'format #6')
     assert_raises(test, expected_str('datetime.strftime()', 1234),
                   function() t:format(1234) end)
+end)
+
+test:test("Datetime formatting of huge dates", function(test)
+    test:plan(14)
+    local base = {month = 6, day = 10, hour = 12, min = 10, sec = 10}
+    local variants = {
+        {-5000000, '-5000000-06-10T12:10:10Z', '-5000000-06-10T12:10:10.000+0000'},
+        {-10000, '-10000-06-10T12:10:10Z', '-10000-06-10T12:10:10.000+0000'},
+        {-1, '-001-06-10T12:10:10Z', '-001-06-10T12:10:10.000+0000'},
+        {1, '0001-06-10T12:10:10Z', '0001-06-10T12:10:10.000+0000'},
+        {10, '0010-06-10T12:10:10Z', '0010-06-10T12:10:10.000+0000'},
+        {10000, '10000-06-10T12:10:10Z', '10000-06-10T12:10:10.000+0000'},
+        {5000000, '5000000-06-10T12:10:10Z', '5000000-06-10T12:10:10.000+0000'},
+    }
+
+    for _, var in pairs(variants) do
+        local year, str, strf = unpack(var)
+        local obj = base
+        obj['year'] = year
+        local t = date.new(obj)
+        test:is(t:format(), str, ('default format for year = %d'):format(year))
+        test:is(t:format('%FT%T.%f%z'), strf,
+                ('strftime for year = %d'):format(year))
+    end
 end)
 
 test:test("Datetime string formatting detailed", function(test)
