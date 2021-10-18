@@ -678,6 +678,23 @@ box_check_uri(const char *source, const char *option_name)
 	return 0;
 }
 
+static int
+box_check_uri_array(struct cfg_uri_array *uri_array, const char *option_name)
+{
+	return box_check_uri(uri_array->uri, option_name);
+}
+
+static int
+box_check_listen(void)
+{
+	struct cfg_uri_array uri_array;
+	if (cfg_uri_array_create(&uri_array, "listen") != 0)
+		return -1;
+	int rc = box_check_uri_array(&uri_array, "listen");
+	cfg_uri_array_destroy(&uri_array);
+	return rc;
+}
+
 static enum election_mode
 box_check_election_mode(void)
 {
@@ -1146,7 +1163,7 @@ box_check_config(void)
 {
 	struct tt_uuid uuid;
 	box_check_say();
-	if (box_check_uri(cfg_gets("listen"), "listen") != 0)
+	if (box_check_listen() != 0)
 		diag_raise();
 	box_check_instance_uuid(&uuid);
 	box_check_replicaset_uuid(&uuid);
@@ -1833,10 +1850,16 @@ box_demote(void)
 int
 box_listen(void)
 {
-	const char *uri = cfg_gets("listen");
-	if (box_check_uri(uri, "listen") != 0 || iproto_listen(uri) != 0)
+	struct cfg_uri_array uri_array;
+	if (cfg_uri_array_create(&uri_array, "listen") != 0)
 		return -1;
-	return 0;
+	int rc = box_check_uri_array(&uri_array, "listen");
+	if (rc != 0)
+		goto end;
+	rc = iproto_listen(&uri_array);
+end:
+	cfg_uri_array_destroy(&uri_array);
+	return rc;
 }
 
 void
