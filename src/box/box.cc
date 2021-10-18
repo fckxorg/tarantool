@@ -681,7 +681,10 @@ box_check_uri(const char *source, const char *option_name)
 static int
 box_check_uri_array(struct cfg_uri_array *uri_array, const char *option_name)
 {
-	return box_check_uri(uri_array->uri, option_name);
+	for (int i = 0; i < uri_array->size; i++)
+		if (box_check_uri(uri_array->uris[i].host, option_name) != 0)
+			return -1;
+	return 0;
 }
 
 static int

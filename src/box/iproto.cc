@@ -229,10 +229,10 @@ iproto_service_array_bind(struct iproto_service_array *array,
 			  const struct cfg_uri_array *uri_array)
 {
 	for (array->service_count = 0;
-	     array->service_count < 1;
+	     array->service_count < uri_array->size;
 	     array->service_count++) {
 		int i = array->service_count;
-		const char *uri = uri_array->uri;
+		const char *uri = uri_array->uris[i].host;
 		if (evio_service_bind(&array->services[i], uri) != 0)
 			return -1;
 	}
@@ -3077,7 +3077,7 @@ iproto_listen(struct cfg_uri_array *uri_array)
 	if (iproto_send_stop_msg() != 0)
 		return -1;
 	iproto_service_array_stop(&tx_service_array);
-	if (uri_array->uri == NULL)
+	if (uri_array->size == 0)
 		return 0;
 	/*
 	 * Please note, we bind sockets in main thread, and then

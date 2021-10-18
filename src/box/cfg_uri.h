@@ -35,8 +35,19 @@
 extern "C" {
 #endif /* defined(__cplusplus) */
 
+struct cfg_uri_option {
+	const char **values;
+	int size;
+};
+
+struct cfg_uri {
+	const char *host;
+	struct cfg_uri_option transport;
+};
+
 struct cfg_uri_array {
-	const char *uri;
+	struct cfg_uri *uris;
+	int size;
 };
 
 void
