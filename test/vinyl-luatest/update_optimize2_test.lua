@@ -11,7 +11,7 @@ g.before_all = function()
         memtx_max_tuple_size = 4 * 1024 * 1024,
         vinyl_read_threads = 2,
         vinyl_write_threads = 3,
-        vinyl_memory = 512 * 1024 * 1024,
+        vinyl_memory = 256 * 1024 * 1024,
         vinyl_range_size = 1024 * 64,
         vinyl_page_size = 1024,
         vinyl_run_count_per_level = 1,
@@ -37,7 +37,6 @@ local function dumped_stmt_count(indices)
     end
     return dumped_count
 end
-
 
 g.test_optimize_one_index = function()
     -- optimize one index
@@ -370,4 +369,4 @@ end
 --                                     {1009, 1009},
 --                                     {1010, 1010}})
 -- end
-
+--
