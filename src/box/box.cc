@@ -713,15 +713,28 @@ box_check_election_timeout(void)
 	return d;
 }
 
-static void
+static int
+box_check_uri_array(const char *option_name)
+{
+	int count = cfg_getarr_size(option_name);
+	for (int i = 0; i < count; i++) {
+		const char *source = cfg_getarr_elem(option_name, i);
+		if (box_check_uri(source, option_name) != 0)
+			return -1;
+	}
+	return 0;
+}
+
+static inline int
 box_check_replication(void)
 {
-	int count = cfg_getarr_size("replication");
-	for (int i = 0; i < count; i++) {
-		const char *source = cfg_getarr_elem("replication", i);
-		if (box_check_uri(source, "replication") != 0)
-			diag_raise();
-	}
+	return box_check_uri_array("replication");
+}
+
+static inline int
+box_check_listen(void)
+{
+	return box_check_uri_array("listen");
 }
 
 static double
@@ -1146,7 +1159,7 @@ box_check_config(void)
 {
 	struct tt_uuid uuid;
 	box_check_say();
-	if (box_check_uri(cfg_gets("listen"), "listen") != 0)
+	if (box_check_listen() != 0)
 		diag_raise();
 	box_check_instance_uuid(&uuid);
 	box_check_replicaset_uuid(&uuid);
@@ -1154,7 +1167,8 @@ box_check_config(void)
 		diag_raise();
 	if (box_check_election_timeout() < 0)
 		diag_raise();
-	box_check_replication();
+	if (box_check_replication() != 0)
+		diag_raise();
 	box_check_replication_timeout();
 	box_check_replication_connect_timeout();
 	box_check_replication_connect_quorum();
@@ -1274,7 +1288,8 @@ box_set_replication(void)
 		return;
 	}
 
-	box_check_replication();
+	if (box_check_replication() != 0)
+		diag_raise();
 	/*
 	 * Try to connect to all replicas within the timeout period.
 	 * Stay in orphan mode in case we fail to connect to at least
@@ -1833,10 +1848,23 @@ box_demote(void)
 int
 box_listen(void)
 {
-	const char *uri = cfg_gets("listen");
-	if (box_check_uri(uri, "listen") != 0 || iproto_listen(uri) != 0)
+	const char *uris[IPROTO_LISTEN_SOCKET_MAX];
+	int count = cfg_getarr_size("listen");
+	if (count >= IPROTO_LISTEN_SOCKET_MAX) {
+		diag_set(ClientError, ER_CFG, "listen",
+			 "too many listen uris");
 		return -1;
-	return 0;
+	}
+	for (int i = 0; i < count; i++) {
+		uris[i] = cfg_getarr_elem("listen", i);
+		if (uris[i] == NULL) {
+			diag_set(ClientError, ER_CFG, "listen", "xxx");
+			return -1;
+		}
+		if (box_check_uri(uris[i], "listen") != 0)
+			return -1;
+	}
+	return iproto_listen(uris, count);
 }
 
 void
