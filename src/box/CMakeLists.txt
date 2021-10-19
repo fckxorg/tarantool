@@ -172,6 +172,7 @@ add_library(box STATIC
     session.cc
     port.c
     txn.c
+        tx_stat.c
     txn_limbo.c
     raft.c
     box.cc

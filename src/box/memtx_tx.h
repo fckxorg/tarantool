@@ -104,6 +104,7 @@ struct memtx_story_link {
  * All stories are linked into a list of stories of the same key of each index.
  */
 struct memtx_story {
+	bool is_pinned;
 	/** The story is about this tuple. The tuple is referenced. */
 	struct tuple *tuple;
 	/**
@@ -151,6 +152,9 @@ struct memtx_story {
 	 * Number of indexes in this space - and the count of link[].
 	 */
 	uint32_t index_count;
+	struct txn *owner;
+	/** Link in txn::stories_owned */
+	struct rlist in_txn_stories;
 	/**
 	 * Link with older and newer stories (and just tuples) for each
 	 * index respectively.

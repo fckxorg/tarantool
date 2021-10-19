@@ -83,6 +83,7 @@
 #include "core/crash.h"
 #include "ssl_cert_paths_discover.h"
 #include "core/errinj.h"
+#include "box/tx_stat.h"
 
 static pid_t master_pid = getpid();
 static struct pidfh *pid_file_handle;
@@ -547,6 +548,7 @@ tarantool_free(void)
 #endif
 	crypto_free();
 	memtx_tx_manager_free();
+	tx_stat_free();
 	coll_free();
 	systemd_free();
 	say_logger_free();
@@ -700,6 +702,7 @@ main(int argc, char **argv)
 	signal_init();
 	cbus_init();
 	coll_init();
+	tx_stat_init();
 	memtx_tx_manager_init();
 	module_init();
 	crypto_init();

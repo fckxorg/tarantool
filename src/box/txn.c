@@ -93,11 +93,12 @@ txn_add_redo(struct txn *txn, struct txn_stmt *stmt, struct request *request)
 
 /** Initialize a new stmt object within txn. */
 static struct txn_stmt *
-txn_stmt_new(struct region *region)
+txn_stmt_new(struct txn *txn)
 {
 	int size;
 	struct txn_stmt *stmt;
-	stmt = region_alloc_object(region, struct txn_stmt, &size);
+	stmt = tx_region_alloc_object(txn, struct txn_stmt, &size,
+				      TX_ALLOC_STMT);
 	if (stmt == NULL) {
 		diag_set(OutOfMemory, size, "region_alloc_object", "stmt");
 		return NULL;
@@ -183,9 +184,11 @@ txn_rollback_to_svp(struct txn *txn, struct stailq_entry *svp)
 inline static struct txn *
 txn_new(void)
 {
-	if (!stailq_empty(&txn_cache))
-		return stailq_shift_entry(&txn_cache, struct txn, in_txn_cache);
-
+	if (!stailq_empty(&txn_cache)) {
+		struct txn *new_txn = stailq_shift_entry(&txn_cache, struct txn, in_txn_cache);
+		tx_stat_register_txn(new_txn);
+		return new_txn;
+	}
 	/* Create a region. */
 	struct region region;
 	region_create(&region, &cord()->slabc);
@@ -207,6 +210,8 @@ txn_new(void)
 	rlist_create(&txn->conflicted_by_list);
 	rlist_create(&txn->in_read_view_txs);
 	rlist_create(&txn->in_all_txs);
+	rlist_create(&txn->stories_owned);
+	tx_stat_register_txn(txn);
 	return txn;
 }
 
@@ -231,6 +236,19 @@ txn_free(struct txn *txn)
 		rlist_del(&entry->in_conflict_list);
 		rlist_del(&entry->in_conflicted_by_list);
 	}
+	struct memtx_story *story, *next_story;
+	rlist_foreach_entry_safe(story, &txn->stories_owned,
+				 in_txn_stories, next_story) {
+		assert(story != NULL);
+		rlist_del(&story->in_txn_stories);
+		assert(story->owner == txn);
+		uint32_t story_size = sizeof(struct memtx_story) + sizeof(struct memtx_story_link) * story->index_count;
+		tx_rebind_allocation(txn, NULL, story_size, TX_ALLOC_STORY);
+		if (story->is_pinned) {
+			tx_repin_tuple(txn, NULL, story->tuple);
+		}
+		story->owner = NULL;
+	}
 	rlist_foreach_entry_safe(entry, &txn->conflicted_by_list,
 				 in_conflicted_by_list, next) {
 		rlist_del(&entry->in_conflict_list);
@@ -247,8 +265,8 @@ txn_free(struct txn *txn)
 		txn_stmt_destroy(stmt);
 
 	/* Truncate region up to struct txn size. */
-	region_truncate(&txn->region, sizeof(struct txn));
 	stailq_add(&txn_cache, &txn->in_txn_cache);
+	tx_stat_clear_txn(txn);
 }
 
 void
@@ -356,7 +374,7 @@ txn_begin_stmt(struct txn *txn, struct space *space, uint16_t type)
 		return -1;
 	}
 
-	struct txn_stmt *stmt = txn_stmt_new(&txn->region);
+	struct txn_stmt *stmt = txn_stmt_new(txn);
 	if (stmt == NULL)
 		return -1;
 
@@ -1107,8 +1125,9 @@ box_txn_alloc(size_t size)
 		double lf;
 		long l;
 	};
-	return region_aligned_alloc(&txn->region, size,
-	                            alignof(union natural_align));
+	return tx_region_aligned_alloc(txn, size,
+	                            alignof(union natural_align),
+				       TX_ALLOC_USER_DATA);
 }
 
 struct txn_savepoint *
@@ -1120,8 +1139,9 @@ txn_savepoint_new(struct txn *txn, const char *name)
 	static_assert(sizeof(svp->name) == 1,
 		      "name member already has 1 byte for 0 termination");
 	size_t size = sizeof(*svp) + name_len;
-	svp = (struct txn_savepoint *)region_aligned_alloc(&txn->region, size,
-							   alignof(*svp));
+	svp = (struct txn_savepoint *)tx_region_aligned_alloc(txn, size,
+							      alignof(*svp),
+							      TX_ALLOC_SVP);
 	if (svp == NULL) {
 		diag_set(OutOfMemory, size, "region_aligned_alloc", "svp");
 		return NULL;

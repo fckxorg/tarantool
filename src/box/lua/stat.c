@@ -43,6 +43,7 @@
 #include "box/engine.h"
 #include "box/vinyl.h"
 #include "box/sql.h"
+#include "box/memtx_tx.h"
 #include "info/info.h"
 #include "lua/info.h"
 #include "lua/utils.h"
@@ -255,6 +256,53 @@ lbox_stat_sql(struct lua_State *L)
 	return 1;
 }
 
+//static void
+//fill_mvcc_stat_item(struct lua_State *L, uint64_t min, uint64_t max,
+//		    int64_t total)
+//{
+//	lua_pushstring(L, "min");
+//	lua_pushnumber(L, min);
+//	lua_settable(L, -3);
+//
+//	lua_pushstring(L, "max");
+//	lua_pushnumber(L, max);
+//	lua_settable(L, -3);
+//
+//	lua_pushstring(L, "total");
+//	lua_pushnumber(L, total);
+//	lua_settable(L, -3);
+//}
+//
+//static int
+//set_mvcc_stat_item(const char *name, uint64_t min, uint64_t max, uint64_t total,
+//		   void *cb_ctx)
+//{
+//	struct lua_State *L = (struct lua_State *) cb_ctx;
+//
+//	lua_pushstring(L, name);
+//	lua_newtable(L);
+//
+//	fill_mvcc_stat_item(L, min, max, total);
+//
+//	lua_settable(L, -3);
+//
+//	return 0;
+//}
+
+static int
+lbox_stat_mvcc_index(struct lua_State *L)
+{
+	(void)L;
+	abort();
+}
+
+static int
+lbox_stat_mvcc_call(struct lua_State *L)
+{
+	(void)L;
+	return 0;
+}
+
 static const struct luaL_Reg lbox_stat_meta [] = {
 	{"__index", lbox_stat_index},
 	{"__call",  lbox_stat_call},
@@ -270,6 +318,12 @@ static const struct luaL_Reg lbox_stat_net_meta [] = {
 static const struct luaL_Reg lbox_stat_net_thread_meta [] = {
 	{"__index", lbox_stat_net_thread_index},
 	{"__call",  lbox_stat_net_thread_call},
+	{NULL, NULL}
+};
+
+static const struct luaL_Reg lbox_stat_mvcc_meta [] = {
+	{"__index", lbox_stat_mvcc_index},
+	{"__call",  lbox_stat_mvcc_call},
 	{NULL, NULL}
 };
 
@@ -308,5 +362,17 @@ box_lua_stat_init(struct lua_State *L)
 	luaL_register(L, NULL, lbox_stat_net_thread_meta);
 	lua_setmetatable(L, -2);
 	lua_pop(L, 1); /* stat net module */
+
+	static const struct luaL_Reg mvccstatlib [] = {
+		{NULL, NULL}
+	};
+
+	luaL_register_module(L, "box.stat.mvcc", mvccstatlib);
+
+	lua_newtable(L);
+	luaL_register(L, NULL, lbox_stat_mvcc_meta);
+	lua_setmetatable(L, -2);
+	lua_pop(L, 1); /* stat mvcc module */
+
 }
 

@@ -38,6 +38,7 @@
 #include "txn.h"
 #include "schema_def.h"
 #include "small/mempool.h"
+#include "tx_stat.h"
 
 static uint32_t
 memtx_tx_story_key_hash(const struct tuple *a)
@@ -328,9 +329,9 @@ memtx_tx_cause_conflict(struct txn *breaker, struct txn *victim)
 		rlist_del(&tracker->in_conflicted_by_list);
 	} else {
 		size_t size;
-		tracker = region_alloc_object(&victim->region,
+		tracker = tx_region_alloc_object(victim,
 					      struct tx_conflict_tracker,
-					      &size);
+					      &size, TX_ALLOC_TRACKER);
 		if (tracker == NULL) {
 			diag_set(OutOfMemory, size, "tx region",
 				 "conflict_tracker");
@@ -363,19 +364,49 @@ memtx_tx_handle_conflict(struct txn *breaker, struct txn *victim)
 	}
 }
 
+static inline bool
+memtx_tx_story_is_pinned(struct memtx_story *story) {
+	assert(story->is_pinned == tx_tuple_is_pinned(story->tuple));
+	return story->is_pinned;
+}
+
+/**
+ * @brief Use these methods to ref/unref tuple from @a story
+ * by primary index. Do not use bare tuple_[un]ref!!!
+ */
+static inline void
+memtx_tx_ref_to_primary(struct memtx_story *story)
+{
+	assert(story != NULL);
+	assert(memtx_tx_story_is_pinned(story));
+	tuple_ref(story->tuple);
+	tx_release_tuple(story->owner, story->tuple);
+	story->is_pinned = false;
+}
+
+static inline void
+memtx_tx_unref_from_primary(struct memtx_story *story)
+{
+	assert(story != NULL);
+	assert(!memtx_tx_story_is_pinned(story));
+	tuple_unref(story->tuple);
+	tx_pin_tuple(story->owner, story->tuple);
+	story->is_pinned = true;
+}
+
 /**
  * Create a new story and link it with the @a tuple.
  * @return story on success, NULL on error (diag is set).
  */
 static struct memtx_story *
-memtx_tx_story_new(struct space *space, struct tuple *tuple)
+memtx_tx_story_new(struct txn *txn, struct space *space, struct tuple *tuple, bool pin)
 {
 	txm.must_do_gc_steps += TX_MANAGER_GC_STEPS_SIZE;
 	assert(!tuple->is_dirty);
 	uint32_t index_count = space->index_count;
 	assert(index_count < BOX_INDEX_MAX);
 	struct mempool *pool = &txm.memtx_tx_story_pool[index_count];
-	struct memtx_story *story = (struct memtx_story *) mempool_alloc(pool);
+	struct memtx_story *story = (struct memtx_story *) tx_mempool_alloc(txn, pool, TX_ALLOC_STORY);
 	if (story == NULL) {
 		size_t item_size = sizeof(struct memtx_story) +
 				   index_count *
@@ -391,7 +422,14 @@ memtx_tx_story_new(struct space *space, struct tuple *tuple)
 	mh_history_put(txm.history, put_story, &empty, 0);
 	tuple->is_dirty = true;
 	tuple_ref(tuple);
+	if (pin) {
+		tx_pin_tuple(txn, tuple);
+		story->is_pinned = true;
+	} else {
+		story->is_pinned = false;
+	}
 
+	story->owner = txn;
 	story->space = space;
 	story->index_count = index_count;
 	story->add_stmt = NULL;
@@ -401,6 +439,7 @@ memtx_tx_story_new(struct space *space, struct tuple *tuple)
 	rlist_create(&story->reader_list);
 	rlist_add_tail(&txm.all_stories, &story->in_all_stories);
 	rlist_add(&space->memtx_stories, &story->in_space_stories);
+	rlist_add(&txn->stories_owned, &story->in_txn_stories);
 	for (uint32_t i = 0; i < index_count; i++) {
 		story->link[i].newer_story = story->link[i].older_story = NULL;
 		rlist_create(&story->link[i].nearby_gaps);
@@ -434,6 +473,10 @@ memtx_tx_story_delete(struct memtx_story *story)
 	assert(pos != mh_end(txm.history));
 	mh_history_del(txm.history, pos, 0);
 
+	if (memtx_tx_story_is_pinned(story)) {
+		tx_release_tuple(story->owner, story->tuple);
+	}
+
 	story->tuple->is_dirty = false;
 	tuple_unref(story->tuple);
 
@@ -446,7 +489,10 @@ memtx_tx_story_delete(struct memtx_story *story)
 #endif
 
 	struct mempool *pool = &txm.memtx_tx_story_pool[story->index_count];
-	mempool_free(pool, story);
+	if (story->owner != NULL) {
+		rlist_del(&story->in_txn_stories);
+	}
+	tx_mempool_free(story->owner, pool, story, TX_ALLOC_STORY);
 }
 
 /**
@@ -637,8 +683,8 @@ memtx_tx_story_link_top(struct memtx_story *new_top,
 	 * index and dereference the tuple that was removed from it.
 	 */
 	if (idx == 0) {
-		tuple_ref(new_top->tuple);
-		tuple_unref(old_top->tuple);
+		memtx_tx_ref_to_primary(new_top);
+		memtx_tx_unref_from_primary(old_top);
 	}
 }
 
@@ -712,9 +758,10 @@ memtx_tx_story_unlink_top(struct memtx_story *story, uint32_t idx)
 	 * index and dereference the tuple that was removed from it.
 	 */
 	if (idx == 0) {
-		if (old_story != NULL)
-			tuple_ref(old_story->tuple);
-		tuple_unref(story->tuple);
+		if (old_story != NULL) {
+			memtx_tx_ref_to_primary(old_story);
+		}
+		memtx_tx_unref_from_primary(story);
 	}
 
 	memtx_tx_story_unlink_top_light(story, idx);
@@ -836,7 +883,7 @@ memtx_tx_story_full_unlink(struct memtx_story *story)
 				 * Once removed it must be unreferenced.
 				 */
 				if (i == 0)
-					tuple_unref(story->tuple);
+					memtx_tx_unref_from_primary(story);
 			}
 
 			memtx_tx_story_unlink(story, link->older_story, i);
@@ -994,18 +1041,17 @@ struct memtx_tx_conflict
 
 /**
  * Save @a breaker in list with head @a conflicts_head. New list node is
- * allocated on @a region.
+ * allocated on a region of @a breaker.
  * @return 0 on success, -1 on memory error.
  */
 static int
 memtx_tx_save_conflict(struct txn *breaker, struct txn *victim,
-		       struct memtx_tx_conflict **conflicts_head,
-		       struct region *region)
+		       struct memtx_tx_conflict **conflicts_head)
 {
 	size_t err_size;
 	struct memtx_tx_conflict *next_conflict;
-	next_conflict = region_alloc_object(region, struct memtx_tx_conflict,
-					    &err_size);
+	next_conflict = tx_region_alloc_object(breaker, struct memtx_tx_conflict,
+					    &err_size, TX_ALLOC_TRACKER);
 	if (next_conflict == NULL) {
 		diag_set(OutOfMemory, err_size, "txn_region", "txn conflict");
 		return -1;
@@ -1094,8 +1140,7 @@ point_hole_storage_find(struct index *index, struct tuple *tuple)
 static int
 check_hole(struct space *space, uint32_t index,
 	   struct tuple *new_tuple, struct txn *inserter,
-	   struct memtx_tx_conflict **collected_conflicts,
-	   struct region *region)
+	   struct memtx_tx_conflict **collected_conflicts)
 {
 	struct point_hole_item *list =
 		point_hole_storage_find(space->index[index], new_tuple);
@@ -1105,7 +1150,7 @@ check_hole(struct space *space, uint32_t index,
 	struct point_hole_item *item = list;
 	do {
 		if (memtx_tx_save_conflict(inserter, item->txn,
-					   collected_conflicts, region) != 0)
+					   collected_conflicts) != 0)
 			return -1;
 		item = rlist_entry(item->ring.next,
 				   struct point_hole_item, ring);
@@ -1125,8 +1170,7 @@ static int
 check_dup_clean(struct txn_stmt *stmt, struct tuple *new_tuple,
 		struct tuple **replaced, struct tuple **old_tuple,
 		enum dup_replace_mode mode,
-		struct memtx_tx_conflict **collected_conflicts,
-		struct region *region)
+		struct memtx_tx_conflict **collected_conflicts)
 {
 	assert(replaced[0] == NULL || !replaced[0]->is_dirty);
 	struct space *space = stmt->space;
@@ -1141,7 +1185,7 @@ check_dup_clean(struct txn_stmt *stmt, struct tuple *new_tuple,
 
 	if (replaced[0] == NULL)
 		check_hole(space, 0, new_tuple, stmt->txn,
-			   collected_conflicts, region);
+			   collected_conflicts);
 
 	for (uint32_t i = 1; i < space->index_count; i++) {
 		/*
@@ -1151,7 +1195,7 @@ check_dup_clean(struct txn_stmt *stmt, struct tuple *new_tuple,
 		if (replaced[i] == NULL) {
 			/* NULL is OK. */
 			check_hole(space, i, new_tuple, stmt->txn,
-				   collected_conflicts, region);
+				   collected_conflicts);
 			continue;
 		}
 		if (!replaced[i]->is_dirty) {
@@ -1185,7 +1229,7 @@ check_dup_clean(struct txn_stmt *stmt, struct tuple *new_tuple,
 
 		if (check_visible == NULL)
 			check_hole(space, i, new_tuple, stmt->txn,
-				   collected_conflicts, region);
+				   collected_conflicts);
 	}
 
 	*old_tuple = replaced[0];
@@ -1202,8 +1246,7 @@ static int
 check_dup_dirty(struct txn_stmt *stmt, struct tuple *new_tuple,
 		struct tuple **replaced, struct tuple **old_tuple,
 		enum dup_replace_mode mode,
-		struct memtx_tx_conflict **collected_conflicts,
-		struct region *region)
+		struct memtx_tx_conflict **collected_conflicts)
 {
 	assert(replaced[0] != NULL && replaced[0]->is_dirty);
 	struct space *space = stmt->space;
@@ -1223,7 +1266,7 @@ check_dup_dirty(struct txn_stmt *stmt, struct tuple *new_tuple,
 
 	if (visible_replaced == NULL)
 		check_hole(space, 0, new_tuple, stmt->txn,
-			   collected_conflicts, region);
+			   collected_conflicts);
 
 	for (uint32_t i = 1; i < space->index_count; i++) {
 		/*
@@ -1233,7 +1276,7 @@ check_dup_dirty(struct txn_stmt *stmt, struct tuple *new_tuple,
 		if (replaced[i] == NULL) {
 			/* NULL is OK. */
 			check_hole(space, i, new_tuple, stmt->txn,
-				   collected_conflicts, region);
+				   collected_conflicts);
 			continue;
 		}
 		if (!replaced[i]->is_dirty) {
@@ -1265,7 +1308,7 @@ check_dup_dirty(struct txn_stmt *stmt, struct tuple *new_tuple,
 
 		if (check_visible == NULL)
 			check_hole(space, i, new_tuple, stmt->txn,
-				   collected_conflicts, region);
+				   collected_conflicts);
 	}
 
 	*old_tuple = visible_replaced;
@@ -1282,18 +1325,17 @@ static int
 check_dup_common(struct txn_stmt *stmt, struct tuple *new_tuple,
 		 struct tuple **directly_replaced, struct tuple **old_tuple,
 		 enum dup_replace_mode mode,
-		 struct memtx_tx_conflict **collected_conflicts,
-		 struct region *region)
+		 struct memtx_tx_conflict **collected_conflicts)
 {
 	struct tuple *replaced = directly_replaced[0];
 	if (replaced == NULL || !replaced->is_dirty)
 		return check_dup_clean(stmt, new_tuple, directly_replaced,
 				       old_tuple, mode,
-				       collected_conflicts, region);
+				       collected_conflicts);
 	else
 		return check_dup_dirty(stmt, new_tuple, directly_replaced,
 				       old_tuple, mode,
-				       collected_conflicts, region);
+				       collected_conflicts);
 }
 
 static struct gap_item *
@@ -1414,7 +1456,6 @@ memtx_tx_history_add_insert_stmt(struct txn_stmt *stmt,
 	struct space *space = stmt->space;
 	struct memtx_story *add_story = NULL;
 	struct memtx_story *created_story = NULL, *replaced_story = NULL;
-	struct region *region = &stmt->txn->region;
 
 	/*
 	 * List of transactions that will conflict us once one of them
@@ -1444,18 +1485,20 @@ memtx_tx_history_add_insert_stmt(struct txn_stmt *stmt,
 	/* Check overwritten tuple */
 	int rc = check_dup_common(stmt, new_tuple, directly_replaced,
 				  &old_tuple, mode,
-				  &collected_conflicts, region);
+				  &collected_conflicts);
 	if (rc != 0)
 		goto fail;
 
 	/* Create add_story and replaced_story if necessary. */
-	add_story = memtx_tx_story_new(space, new_tuple);
+	assert(stmt->txn != NULL);
+	add_story = memtx_tx_story_new(stmt->txn, space, new_tuple, true);
 	if (add_story == NULL)
 		goto fail;
 	memtx_tx_story_link_added_by(add_story, stmt);
 
 	if (replaced != NULL && !replaced->is_dirty) {
-		created_story = memtx_tx_story_new(space, replaced);
+		created_story = memtx_tx_story_new(stmt->txn, space, replaced,
+						   false);
 		if (created_story == NULL)
 			goto fail;
 		replaced_story = created_story;
@@ -1515,9 +1558,15 @@ memtx_tx_history_add_insert_stmt(struct txn_stmt *stmt,
 		 * in primary index must be referenced (a replaces tuple must
 		 * be dereferenced).
 		 */
-		tuple_ref(new_tuple);
-		if (directly_replaced[0] != NULL)
-			tuple_unref(directly_replaced[0]);
+		assert(add_story->owner == stmt->txn);
+		assert(add_story == memtx_tx_story_get(new_tuple));
+
+		memtx_tx_ref_to_primary(add_story);
+		if (directly_replaced[0] != NULL) {
+			struct memtx_story *old_story =
+				memtx_tx_story_get(directly_replaced[0]);
+			memtx_tx_unref_from_primary(old_story);
+		}
 	}
 
 	*result = old_tuple;
@@ -1577,7 +1626,9 @@ memtx_tx_history_add_delete_stmt(struct txn_stmt *stmt,
 	if (old_tuple->is_dirty) {
 		del_story = memtx_tx_story_get(old_tuple);
 	} else {
-		del_story = memtx_tx_story_new(space, old_tuple);
+		assert(stmt->txn != NULL);
+		del_story = memtx_tx_story_new(stmt->txn, space, old_tuple,
+					       false);
 		if (del_story == NULL)
 			return -1;
 	}
@@ -1976,7 +2027,8 @@ memtx_tx_delete_gap(struct gap_item *item)
 {
 	rlist_del(&item->in_gap_list);
 	rlist_del(&item->in_nearby_gaps);
-	mempool_free(&txm.gap_item_mempoool, item);
+	tx_mempool_free(item->txn, &txm.gap_item_mempoool, item,
+			TX_ALLOC_TRACKER);
 }
 
 static void
@@ -1984,7 +2036,8 @@ memtx_tx_full_scan_item_delete(struct full_scan_item *item)
 {
 	rlist_del(&item->in_full_scan_list);
 	rlist_del(&item->in_full_scans);
-	mempool_free(&txm.full_scan_item_mempool, item);
+	tx_mempool_free(item->txn, &txm.full_scan_item_mempool, item,
+			TX_ALLOC_TRACKER);
 }
 
 void
@@ -2042,8 +2095,9 @@ tx_read_tracker_new(struct txn *reader, struct memtx_story *story,
 {
 	size_t sz;
 	struct tx_read_tracker *tracker;
-	tracker = region_alloc_object(&reader->region,
-				      struct tx_read_tracker, &sz);
+	tracker = tx_region_alloc_object(reader,
+				      struct tx_read_tracker, &sz,
+					 TX_ALLOC_TRACKER);
 	if (tracker == NULL) {
 		diag_set(OutOfMemory, sz, "tx region", "read_tracker");
 		return NULL;
@@ -2123,7 +2177,8 @@ memtx_tx_track_read(struct txn *txn, struct space *space, struct tuple *tuple)
 		struct memtx_story *story = memtx_tx_story_get(tuple);
 		return memtx_tx_track_read_story(txn, space, story, UINT64_MAX);
 	} else {
-		struct memtx_story *story = memtx_tx_story_new(space, tuple);
+		struct memtx_story *story = memtx_tx_story_new(txn, space,
+							       tuple, false);
 		if (story == NULL)
 			return -1;
 		struct tx_read_tracker *tracker;
@@ -2147,7 +2202,8 @@ point_hole_storage_new(struct index *index, const char *key,
 {
 	struct mempool *pool = &txm.point_hole_item_pool;
 	struct point_hole_item *object =
-		(struct point_hole_item *) mempool_alloc(pool);
+		(struct point_hole_item *) tx_mempool_alloc(txn, pool,
+							   TX_ALLOC_TRACKER);
 	if (object == NULL) {
 		diag_set(OutOfMemory, sizeof(*object),
 			 "mempool_alloc", "point_hole_item");
@@ -2161,9 +2217,10 @@ point_hole_storage_new(struct index *index, const char *key,
 	if (key_len <= sizeof(object->short_key)) {
 		object->key = object->short_key;
 	} else {
-		object->key = (char *)region_alloc(&txn->region, key_len);
+		object->key = (char *)tx_region_alloc(txn, key_len,
+						      TX_ALLOC_TRACKER);
 		if (object->key == NULL) {
-			mempool_free(pool, object);
+			tx_mempool_free(txn, pool, object, TX_ALLOC_TRACKER);
 			diag_set(OutOfMemory, key_len, "tx region",
 				 "point key");
 			return -1;
@@ -2240,7 +2297,7 @@ point_hole_storage_delete(struct point_hole_item *object)
 	}
 	rlist_del(&object->in_point_holes_list);
 	struct mempool *pool = &txm.point_hole_item_pool;
-	mempool_free(pool, object);
+	tx_mempool_free(object->txn, pool, object, TX_ALLOC_TRACKER);
 }
 
 /**
@@ -2269,7 +2326,7 @@ memtx_tx_gap_item_new(struct txn *txn, enum iterator_type type,
 		      const char *key, uint32_t part_count)
 {
 	struct gap_item *item = (struct gap_item *)
-		mempool_alloc(&txm.gap_item_mempoool);
+		tx_mempool_alloc(txn, &txm.gap_item_mempoool, TX_ALLOC_TRACKER);
 	if (item == NULL) {
 		diag_set(OutOfMemory, sizeof(*item), "mempool_alloc", "gap");
 		return NULL;
@@ -2287,9 +2344,11 @@ memtx_tx_gap_item_new(struct txn *txn, enum iterator_type type,
 	} else if (item->key_len <= sizeof(item->short_key)) {
 		item->key = item->short_key;
 	} else {
-		item->key = (char *)region_alloc(&txn->region, item->key_len);
+		item->key = (char *)tx_region_alloc(txn, item->key_len,
+						    TX_ALLOC_TRACKER);
 		if (item->key == NULL) {
-			mempool_free(&txm.gap_item_mempoool, item);
+			tx_mempool_free(txn, &txm.gap_item_mempoool, item,
+					TX_ALLOC_TRACKER);
 			diag_set(OutOfMemory, item->key_len, "tx region",
 				 "point key");
 			return NULL;
@@ -2327,9 +2386,11 @@ memtx_tx_track_gap_slow(struct txn *txn, struct space *space, struct index *inde
 		if (successor->is_dirty) {
 			story = memtx_tx_story_get(successor);
 		} else {
-			story = memtx_tx_story_new(space, successor);
+			assert(txn != NULL);
+			story = memtx_tx_story_new(txn, space, successor, false);
 			if (story == NULL) {
-				mempool_free(&txm.gap_item_mempoool, item);
+				tx_mempool_free(txn, &txm.gap_item_mempoool,
+						item, TX_ALLOC_TRACKER);
 				return -1;
 			}
 		}
@@ -2347,7 +2408,7 @@ static struct full_scan_item *
 memtx_tx_full_scan_item_new(struct txn *txn)
 {
 	struct full_scan_item *item = (struct full_scan_item *)
-		mempool_alloc(&txm.full_scan_item_mempool);
+		tx_mempool_alloc(txn, &txm.full_scan_item_mempool, TX_ALLOC_TRACKER);
 	if (item == NULL) {
 		diag_set(OutOfMemory, sizeof(*item), "mempool_alloc",
 			 "full_scan_item");

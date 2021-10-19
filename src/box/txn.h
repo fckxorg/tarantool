@@ -37,6 +37,7 @@
 #include "fiber.h"
 #include "space.h"
 #include "journal.h"
+#include "tx_stat.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -426,6 +427,8 @@ struct txn {
 	struct rlist full_scan_list;
 	/** Link in tx_manager::all_txs. */
 	struct rlist in_all_txs;
+	/** List of owned stories. */
+	struct rlist stories_owned;
 	/** True in case transaction provides any DDL change. */
 	bool is_schema_changed;
 };
