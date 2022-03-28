@@ -114,10 +114,7 @@ tuple_dictionary_set_name(struct tuple_dictionary *dict, const char *name,
 	struct mh_strnu32_node_t name_node = {
 		name, name_len, name_hash, fieldno
 	};
-	rc = mh_strnu32_put(dict->hash, &name_node, NULL, NULL);
-	/* Memory was reserved in new(). */
-	assert(rc != mh_end(dict->hash));
-	(void) rc;
+	mh_strnu32_put(dict->hash, &name_node, NULL, NULL);
 	return 0;
 }
 
@@ -145,17 +142,7 @@ tuple_dictionary_new(const struct field_def *fields, uint32_t field_count)
 		goto err_memory;
 	}
 	dict->hash = mh_strnu32_new();
-	if (dict->hash == NULL) {
-		diag_set(OutOfMemory, sizeof(*dict->hash),
-			 "mh_strnu32_new", "dict->hash");
-		goto err_hash;
-	}
-	if (mh_strnu32_reserve(dict->hash, field_count, NULL) != 0) {
-		diag_set(OutOfMemory, field_count *
-			 sizeof(struct mh_strnu32_node_t), "mh_strnu32_reserve",
-			 "dict->hash");
-		goto err_name;
-	}
+	mh_strnu32_reserve(dict->hash, field_count, NULL);
 	char *pos = (char *) dict->names + names_offset;
 	for (uint32_t i = 0; i < field_count; ++i) {
 		int len = strlen(fields[i].name);
@@ -170,7 +157,6 @@ tuple_dictionary_new(const struct field_def *fields, uint32_t field_count)
 
 err_name:
 	tuple_dictionary_delete_hash(dict->hash);
-err_hash:
 	free(dict->names);
 err_memory:
 	free(dict);

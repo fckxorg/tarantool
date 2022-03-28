@@ -51,6 +51,28 @@ struct xstream;
 extern struct rlist engines;
 
 /**
+ * Recovery state of entire tarantool. Apart from memtx recovery state,
+ * which is internal recovery optimization status, this enum describers
+ * real sequence of recovery actions.
+ */
+enum recovery_state {
+	/** Recovery have not been started yet. */
+	RECOVERY_NOT_STARTED,
+	/** Recovery from snapshot file. */
+	INITIAL_RECOVERY,
+	/** Recovery from WAL file(s). */
+	FINAL_RECOVERY,
+	/** Recovery from WAL file(s). */
+	FINISHED_RECOVERY,
+};
+
+/**
+ * The one and only recovery status of entire tarantool.
+ * See enum recovery_state description.
+ */
+extern enum recovery_state recovery_state;
+
+/**
  * Aggregated memory statistics. Used by box.info.memory().
  */
 struct engine_memory_stat {
@@ -147,6 +169,11 @@ struct engine_vtab {
 	 * of WAL catch up durin join on slave side
 	 */
 	int (*begin_final_recovery)(struct engine *);
+	/**
+	 * Notify the engine that the instance is about to enter
+	 * the hot standby mode to complete recovery from WALs.
+	 */
+	int (*begin_hot_standby)(struct engine *);
 	/**
 	 * Inform the engine about the end of recovery from the
 	 * binary log.
@@ -338,8 +365,13 @@ int
 engine_begin_final_recovery(void);
 
 /**
+ * Called before entering the hot standby mode.
+ */
+int
+engine_begin_hot_standby(void);
+
+/**
  * Called at the end of recovery.
- * Build secondary keys in all spaces.
  */
 int
 engine_end_recovery(void);
@@ -395,6 +427,7 @@ int generic_engine_bootstrap(struct engine *);
 int generic_engine_begin_initial_recovery(struct engine *,
 					  const struct vclock *);
 int generic_engine_begin_final_recovery(struct engine *);
+int generic_engine_begin_hot_standby(struct engine *);
 int generic_engine_end_recovery(struct engine *);
 int generic_engine_begin_checkpoint(struct engine *, bool);
 int generic_engine_wait_checkpoint(struct engine *, const struct vclock *);
@@ -475,6 +508,13 @@ static inline void
 engine_begin_final_recovery_xc(void)
 {
 	if (engine_begin_final_recovery() != 0)
+		diag_raise();
+}
+
+static inline void
+engine_begin_hot_standby_xc(void)
+{
+	if (engine_begin_hot_standby() != 0)
 		diag_raise();
 }
 

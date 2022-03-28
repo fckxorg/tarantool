@@ -77,6 +77,7 @@
 #include "trivia/util.h"
 
 #include "decimal.h"
+#include "datetime.h"
 
 /*
  * These #defines should enable >2GB file support on POSIX if the
@@ -355,52 +356,6 @@ sql_stricmp(const char *, const char *);
 int
 sql_strnicmp(const char *, const char *, int);
 
-sql *
-sql_context_db_handle(sql_context *);
-
-
-void
-sql_result_blob(sql_context *, const void *,
-		    int, void (*)(void *));
-
-void
-sql_result_blob64(sql_context *, const void *,
-		      sql_uint64, void (*)(void *));
-
-void
-sql_result_double(sql_context *, double);
-
-void
-sql_result_uint(sql_context *ctx, uint64_t u_val);
-
-void
-sql_result_int(sql_context *ctx, int64_t val);
-
-void
-sql_result_bool(struct sql_context *ctx, bool value);
-
-void
-sql_result_null(sql_context *);
-
-void
-sql_result_text(sql_context *, const char *,
-		    int, void (*)(void *));
-
-void
-sql_result_text64(sql_context *, const char *,
-		      sql_uint64, void (*)(void *));
-
-void
-sql_result_value(sql_context *,
-		     sql_value *);
-
-void
-sql_result_zeroblob(sql_context *, int n);
-
-int
-sql_result_zeroblob64(sql_context *,
-			  sql_uint64 n);
-
 char *
 sql_mprintf(const char *, ...);
 char *
@@ -415,10 +370,6 @@ sql_vsnprintf(int, char *, const char *, va_list);
  */
 #define MATCH_ONE_WILDCARD '_'
 #define MATCH_ALL_WILDCARD '%'
-
-typedef void (*sql_destructor_type) (void *);
-#define SQL_STATIC      ((sql_destructor_type)0)
-#define SQL_TRANSIENT   ((sql_destructor_type)-1)
 
 /**
  * Compile the UTF-8 encoded SQL statement into
@@ -476,25 +427,6 @@ enum sql_subtype {
 
 void
 sql_randomness(int N, void *P);
-
-/**
- * Return the number of affected rows in the last SQL statement.
- */
-void
-sql_row_count(struct sql_context *context, MAYBE_UNUSED int unused1,
-	      MAYBE_UNUSED sql_value **unused2);
-
-void *
-sql_aggregate_context(sql_context *,
-			  int nBytes);
-
-/**
- * Allocate or return the aggregate context containing struct MEM for a user
- * function. A new context is allocated on the first call. Subsequent calls
- * return the same context that was returned on prior calls.
- */
-struct Mem *
-sql_context_agg_mem(struct sql_context *context);
 
 int
 sql_column_count(sql_stmt * pStmt);
@@ -594,14 +526,6 @@ void
 sql_unbind(struct sql_stmt *stmt);
 
 int
-sql_bind_blob(sql_stmt *, int, const void *,
-		  int n, void (*)(void *));
-
-int
-sql_bind_blob64(sql_stmt *, int, const void *,
-		    sql_uint64, void (*)(void *));
-
-int
 sql_bind_double(sql_stmt *, int, double);
 
 /**
@@ -628,21 +552,26 @@ int
 sql_bind_null(sql_stmt *, int);
 
 int
-sql_bind_text64(sql_stmt *, int, const char *,
-		    sql_uint64, void (*)(void *));
+sql_bind_str_static(sql_stmt *stmt, int i, const char *str, uint32_t len);
 
 int
-sql_bind_zeroblob(sql_stmt *, int, int n);
+sql_bind_bin_static(sql_stmt *stmt, int i, const char *str, uint32_t size);
 
 int
-sql_bind_zeroblob64(sql_stmt *, int,
-			sql_uint64);
+sql_bind_array_static(sql_stmt *stmt, int i, const char *str, uint32_t size);
+
+int
+sql_bind_map_static(sql_stmt *stmt, int i, const char *str, uint32_t size);
 
 int
 sql_bind_uuid(struct sql_stmt *stmt, int i, const struct tt_uuid *uuid);
 
 int
 sql_bind_dec(struct sql_stmt *stmt, int i, const decimal_t *dec);
+
+/** Perform DATETIME parameter binding for the sql statement. */
+int
+sql_bind_datetime(struct sql_stmt *stmt, int i, const struct datetime *dt);
 
 /**
  * Return the number of wildcards that should be bound to.
@@ -952,16 +881,6 @@ typedef u64 uptr;
 #define IsPowerOfTwo(X) (((X)&((X)-1))==0)
 
 /*
- * The following value as a destructor means to use sqlDbFree().
- * The sqlDbFree() routine requires two parameters instead of the
- * one parameter that destructors normally want.  So we have to introduce
- * this magic value that the code knows to handle differently.  Any
- * pointer will work here as long as it is distinct from sql_STATIC
- * and sql_TRANSIENT.
- */
-#define SQL_DYNAMIC   ((sql_destructor_type)sqlMallocSize)
-
-/*
  * The usual case where Writable Static Data (WSD) is supported,
  * the sql_WSD and GLOBAL macros become no-ops and have zero
  * performance impact.
@@ -1092,7 +1011,7 @@ struct sql {
 	u8 dfltLockMode;	/* Default locking-mode for attached dbs */
 	u8 mTrace;		/* zero or more sql_TRACE flags */
 	u32 magic;		/* Magic number for detect library misuse */
-	/** Value returned by sql_row_count(). */
+	/** Value returned by ROW_COUNT(). */
 	int nChange;
 	int aLimit[SQL_N_LIMIT];	/* Limits */
 	int nMaxSorterMmap;	/* Maximum size of regions mapped by sorter */
@@ -1203,8 +1122,6 @@ struct type_def {
 					 */
 #define SQL_FUNC_LENGTH   0x0040	/* Built-in length() function */
 #define SQL_FUNC_TYPEOF   0x0080	/* Built-in typeof() function */
-/** Built-in count() function. */
-#define SQL_FUNC_COUNT    0x0100
 #define SQL_FUNC_COALESCE 0x0200	/* Built-in coalesce() or ifnull() */
 #define SQL_FUNC_UNLIKELY 0x0400	/* Built-in unlikely() function */
 /** Built-in min() or least() function. */
@@ -2538,7 +2455,8 @@ int sqlIsNaN(double);
 struct PrintfArguments {
 	int nArg;		/* Total number of arguments */
 	int nUsed;		/* Number of arguments used so far */
-	sql_value **apArg;	/* The argument values */
+	/** The argument values. */
+	const struct Mem *apArg;
 };
 
 void sqlVXPrintf(StrAccum *, const char *, va_list);
@@ -2715,24 +2633,6 @@ ExprList *sqlExprListAppendVector(Parse *, ExprList *, IdList *, Expr *);
  * @param sort_order Sort order to set.
  */
 void sqlExprListSetSortOrder(ExprList *, enum sort_order sort_order);
-
-/**
- * Check if sorting orders are the same in ORDER BY and raise an
- * error if they are not.
- *
- * This check is needed only for ORDER BY + LIMIT, because
- * currently ORDER BY + LIMIT + ASC + DESC produces incorrectly
- * sorted results and thus forbidden. In future, we will
- * support different sorting orders in
- * ORDER BY + LIMIT (e.g. ORDER BY col1 ASC, col2 DESC LIMIT ...)
- * and remove this check.
- * @param parse Parsing context.
- * @param expr_list Expression list with  ORDER BY clause
- * at the end.
- */
-void
-sql_expr_check_sort_orders(struct Parse *parse,
-			   const struct ExprList *expr_list);
 
 void sqlExprListSetName(Parse *, ExprList *, Token *, int);
 void sqlExprListSetSpan(Parse *, ExprList *, ExprSpan *);
@@ -3729,26 +3629,6 @@ void sqlDetach(Parse *, Expr *);
 int sqlAtoF(const char *z, double *, int);
 int sqlGetInt32(const char *, int *);
 
-/**
- * Return number of symbols in the given string.
- *
- * Number of symbols != byte size of string because some symbols
- * are encoded with more than one byte. Also note that all
- * symbols from 'str' to 'str + byte_len' would be counted,
- * even if there is a '\0' somewhere between them.
- *
- * This function is implemented to be fast and indifferent to
- * correctness of string being processed. If input string has
- * even one invalid utf-8 sequence, then the resulting length
- * could be arbitary in these boundaries (0 < len < byte_len).
- * @param str String to be counted.
- * @param byte_len Byte length of given string.
- * @return number of symbols in the given string.
- */
-int
-sql_utf8_char_count(const unsigned char *str, int byte_len);
-
-u32 sqlUtf8Read(const u8 **);
 LogEst sqlLogEst(u64);
 LogEst sqlLogEstAdd(LogEst, LogEst);
 u64 sqlLogEstToInt(LogEst);
@@ -4141,6 +4021,12 @@ char *sqlStrAccumFinish(StrAccum *);
 void sqlStrAccumReset(StrAccum *);
 void sqlSelectDestInit(SelectDest *, int, int, int);
 
+struct sql_context *
+sql_context_new(struct func *func, struct coll *coll);
+
+void
+sql_context_delete(struct sql_context *ctx);
+
 /*
  * Create an expression to load @a column from datasource
  * @a src_idx in @a src_list.
@@ -4201,7 +4087,6 @@ void sqlParser(void *, int, Token, Parse *);
 int sqlParserStackPeak(void *);
 #endif
 
-sql_int64 sqlStmtCurrentTime(sql_context *);
 int sqlVdbeParameterIndex(Vdbe *, const char *, int);
 int sqlTransferBindings(sql_stmt *, sql_stmt *);
 int sqlReprepare(Vdbe *);
@@ -4376,12 +4261,12 @@ struct func_sql_builtin {
 	 * Access checks are redundant, because all SQL built-ins
 	 * are predefined and are executed on SQL privilege level.
 	 */
-	void (*call)(sql_context *ctx, int argc, sql_value **argv);
+	void (*call)(struct sql_context *ctx, int argc, const struct Mem *argv);
 	/**
 	 * A VDBE-memory-compatible finalize method
 	 * (is valid only for aggregate function).
 	 */
-	void (*finalize)(sql_context *ctx);
+	int (*finalize)(struct Mem *mem);
 };
 
 /**
@@ -4409,6 +4294,10 @@ sql_func_find(struct Expr *expr);
 /** Code an OP_ApplyType opcode that will force types onto arguments. */
 int
 sql_emit_args_types(struct Vdbe *v, int reg, struct func *base, uint32_t argc);
+
+/** Return a function that is a finalizer for function with given name. */
+struct func *
+sql_func_finalize(const char *name);
 
 /**
  * Return the parameters of the function with the given name. If the function

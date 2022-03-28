@@ -77,8 +77,9 @@
 #include "box/session.h"
 #include "box/memtx_tx.h"
 #include "box/module_cache.h"
+#include "box/watcher.h"
 #include "systemd.h"
-#include "crypto/crypto.h"
+#include "core/ssl.h"
 #include "core/popen.h"
 #include "core/crash.h"
 #include "ssl_cert_paths_discover.h"
@@ -156,6 +157,7 @@ tarantool_exit(int code)
 	}
 	is_shutting_down = true;
 	exit_code = code;
+	box_broadcast_fmt("box.shutdown", "%b", true);
 	fiber_call(on_shutdown_fiber);
 }
 
@@ -176,6 +178,20 @@ signal_cb(ev_loop *loop, struct ev_signal *w, int revents)
 	if (pid_file)
 		say_crit("got signal %d - %s", w->signum, strsignal(w->signum));
 	tarantool_exit(0);
+}
+
+/*
+ * Handle SIGINT like SIGTERM by default, but allow to overwrite the behavior.
+ * Used by console.
+ */
+static sigint_cb_t signal_sigint_cb = signal_cb;
+
+sigint_cb_t
+set_sigint_cb(sigint_cb_t new_sigint_cb)
+{
+	sigint_cb_t old_cb = signal_sigint_cb;
+	ev_set_cb(&ev_sigs[1], new_sigint_cb);
+	return old_cb;
 }
 
 static void
@@ -251,7 +267,7 @@ signal_init(void)
 	crash_signal_init();
 
 	ev_signal_init(&ev_sigs[0], sig_checkpoint, SIGUSR1);
-	ev_signal_init(&ev_sigs[1], signal_cb, SIGINT);
+	ev_signal_init(&ev_sigs[1], signal_sigint_cb, SIGINT);
 	ev_signal_init(&ev_sigs[2], signal_cb, SIGTERM);
 	ev_signal_init(&ev_sigs[3], signal_sigwinch_cb, SIGWINCH);
 	ev_signal_init(&ev_sigs[4], say_logrotate, SIGHUP);
@@ -454,8 +470,8 @@ load_cfg(void)
 	 * after (optional) daemonising to avoid confusing messages with
 	 * different pids
 	 */
-	say_crit("%s %s", tarantool_package(), tarantool_version());
-	say_crit("log level %i", cfg_geti("log_level"));
+	say_info("%s %s", tarantool_package(), tarantool_version());
+	say_info("log level %i", cfg_geti("log_level"));
 
 	if (pid_file_handle != NULL) {
 		if (pidfile_write(pid_file_handle) == -1)
@@ -545,7 +561,7 @@ tarantool_free(void)
 	memory_free();
 	random_free();
 #endif
-	crypto_free();
+	ssl_free();
 	memtx_tx_manager_free();
 	coll_free();
 	systemd_free();
@@ -721,7 +737,7 @@ main(int argc, char **argv)
 	coll_init();
 	memtx_tx_manager_init();
 	module_init();
-	crypto_init();
+	ssl_init();
 	systemd_init();
 
 	const int override_cert_paths_env_vars = 0;
@@ -787,7 +803,7 @@ main(int argc, char **argv)
 		start_loop = start_loop && ev_activecnt(loop()) > events;
 		region_free(&fiber()->gc);
 		if (start_loop) {
-			say_crit("entering the event loop");
+			say_info("entering the event loop");
 			systemd_snotify("READY=1");
 			ev_now_update(loop());
 			ev_run(loop(), 0);
@@ -803,7 +819,7 @@ main(int argc, char **argv)
 	}
 
 	if (start_loop)
-		say_crit("exiting the event loop");
+		say_info("exiting the event loop");
 	/*
 	 * If Tarantool was stopped using Ctrl+D, then we need to
 	 * call on_shutdown triggers, because Ctrl+D  causes not

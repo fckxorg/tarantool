@@ -53,11 +53,18 @@ error_unref(struct error *e)
 			to_delete->cause->effect = NULL;
 			to_delete->cause = NULL;
 		}
+		error_payload_destroy(&to_delete->payload);
 		to_delete->destroy(to_delete);
 		if (cause == NULL)
 			return;
 		to_delete = cause;
 	}
+}
+
+const struct error_field *
+error_find_field(const struct error *e, const char *name)
+{
+	return error_payload_find(&e->payload, name);
 }
 
 int
@@ -116,16 +123,21 @@ error_create(struct error *e,
 	e->type = type;
 	e->refs = 0;
 	e->saved_errno = 0;
-	if (file != NULL) {
-		snprintf(e->file, sizeof(e->file), "%s", file);
-		e->line = line;
-	} else {
-		e->file[0] = '\0';
-		e->line = 0;
-	}
+	e->code = 0;
+	error_payload_create(&e->payload);
+	if (file == NULL)
+		file = "";
+	error_set_location(e, file, line);
 	e->errmsg[0] = '\0';
 	e->cause = NULL;
 	e->effect = NULL;
+}
+
+void
+error_set_location(struct error *e, const char *file, int line)
+{
+	snprintf(e->file, sizeof(e->file), "%s", file);
+	e->line = line;
 }
 
 struct diag *
@@ -140,6 +152,17 @@ error_format_msg(struct error *e, const char *format, ...)
 	va_list ap;
 	va_start(ap, format);
 	error_vformat_msg(e, format, ap);
+	va_end(ap);
+}
+
+void
+error_append_msg(struct error *e, const char *format, ...)
+{
+	va_list ap;
+	va_start(ap, format);
+	int prefix_len = strlen(e->errmsg);
+	char *msg = e->errmsg + prefix_len;
+	vsnprintf(msg, sizeof(e->errmsg) - prefix_len, format, ap);
 	va_end(ap);
 }
 

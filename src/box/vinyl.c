@@ -261,6 +261,7 @@ vy_info_append_regulator(struct vy_env *env, struct info_handler *h)
 	info_append_int(h, "dump_watermark", r->dump_watermark);
 	info_append_int(h, "rate_limit", vy_quota_get_rate_limit(r->quota,
 							VY_QUOTA_CONSUMER_TX));
+	info_append_int(h, "blocked_writers", r->quota->n_blocked);
 	info_table_end(h); /* regulator */
 }
 
@@ -577,12 +578,28 @@ vy_lsm_find_unique(struct space *space, uint32_t index_id)
 static int
 vinyl_engine_check_space_def(struct space_def *def)
 {
+	for (uint32_t i = 0; i < def->field_count; i++) {
+		if (def->fields[i].compression_type != COMPRESSION_TYPE_NONE) {
+			diag_set(ClientError, ER_UNSUPPORTED,
+				 "Vinyl", "compression");
+			return -1;
+		}
+	}
 	if (def->opts.is_temporary) {
 		diag_set(ClientError, ER_ALTER_SPACE,
 			 def->name, "engine does not support temporary flag");
 		return -1;
 	}
 	return 0;
+}
+
+/** Create a vinyl space statement format. */
+static struct tuple_format *
+vy_space_stmt_format_new(struct vy_stmt_env *env, struct key_def *const *keys,
+			 uint16_t key_count, struct space_def *space_def)
+{
+	return space_tuple_format_new(&env->tuple_format_vtab,
+				      env, keys, key_count, space_def);
 }
 
 static struct space *
@@ -616,9 +633,7 @@ vinyl_engine_create_space(struct engine *engine, struct space_def *def,
 		keys[key_count++] = index_def->key_def;
 
 	struct tuple_format *format;
-	format = vy_stmt_format_new(&env->stmt_env, keys, key_count,
-				    def->fields, def->field_count,
-				    def->exact_field_count, def->dict);
+	format = vy_space_stmt_format_new(&env->stmt_env, keys, key_count, def);
 	if (format == NULL) {
 		free(space);
 		return NULL;
@@ -1732,13 +1747,16 @@ vy_delete(struct vy_env *env, struct vy_tx *tx, struct txn_stmt *stmt,
 	if (vy_unique_key_validate(lsm, key, part_count))
 		return -1;
 	/*
-	 * There are two cases when need to get the full tuple
+	 * There are three cases when we need to get the full tuple
 	 * before deletion.
 	 * - if the space has on_replace triggers and need to pass
 	 *   to them the old tuple.
 	 * - if deletion is done by a secondary index.
+	 * - if the space has a secondary index and deferred DELETES are
+	 *   disabled.
 	 */
-	if (lsm->index_id > 0 || !rlist_empty(&space->on_replace)) {
+	if ((space->index_count > 1 && !space->def->opts.defer_deletes) ||
+	    lsm->index_id > 0 || !rlist_empty(&space->on_replace)) {
 		if (vy_get_by_raw_key(lsm, tx, vy_tx_read_view(tx),
 				      key, part_count, &stmt->old_tuple) != 0)
 			return -1;
@@ -2112,7 +2130,8 @@ vy_upsert(struct vy_env *env, struct vy_tx *tx, struct txn_stmt *stmt,
 	if (tuple_validate_raw(pk->mem_format, tuple))
 		return -1;
 
-	if (space->index_count == 1 && rlist_empty(&space->on_replace))
+	if (space->index_count == 1 && rlist_empty(&space->on_replace) &&
+	    !space->has_foreign_keys)
 		return vy_lsm_upsert(tx, pk, tuple, tuple_end, ops, ops_end);
 
 	const char *old_tuple, *old_tuple_end;
@@ -2267,11 +2286,14 @@ vy_replace(struct vy_env *env, struct vy_tx *tx, struct txn_stmt *stmt,
 			       COLUMN_MASK_FULL) != 0)
 		return -1;
 	/*
-	 * Get the overwritten tuple from the primary index if
-	 * the space has on_replace triggers, in which case we
-	 * need to pass the old tuple to trigger callbacks.
+	 * There are two cases when we need to get the full tuple on replace.
+	 * - if the space has on_replace triggers and need to pass
+	 *   to them the old tuple.
+	 * - if the space has a secondary index and deferred DELETES are
+	 *   disabled.
 	 */
-	if (!rlist_empty(&space->on_replace)) {
+	if ((space->index_count > 1 && !space->def->opts.defer_deletes) ||
+	    !rlist_empty(&space->on_replace)) {
 		if (vy_get(pk, tx, vy_tx_read_view(tx),
 			   stmt->new_tuple, &stmt->old_tuple) != 0)
 			return -1;
@@ -2600,7 +2622,8 @@ vy_env_new(const char *path, size_t memory,
 	vy_mem_env_create(&e->mem_env, memory);
 	vy_scheduler_create(&e->scheduler, write_threads,
 			    vy_env_dump_complete_cb,
-			    &e->run_env, &e->xm->read_views);
+			    &e->run_env, &e->xm->read_views,
+			    &e->quota);
 
 	if (vy_lsm_env_create(&e->lsm_env, e->path,
 			      &e->scheduler.generation,
@@ -2856,6 +2879,7 @@ vinyl_engine_begin_initial_recovery(struct engine *engine,
 			return -1;
 		vy_env_complete_recovery(e);
 		e->status = VINYL_INITIAL_RECOVERY_REMOTE;
+		e->run_env.initial_join = true;
 	}
 	return 0;
 }
@@ -2870,6 +2894,7 @@ vinyl_engine_begin_final_recovery(struct engine *engine)
 		break;
 	case VINYL_INITIAL_RECOVERY_REMOTE:
 		e->status = VINYL_FINAL_RECOVERY_REMOTE;
+		e->run_env.initial_join = false;
 		break;
 	default:
 		unreachable();
@@ -4097,6 +4122,7 @@ err:
 static int
 vy_build_recover_mem(struct vy_lsm *lsm, struct vy_lsm *pk, struct vy_mem *mem)
 {
+	assert(lsm->dump_lsn >= 0);
 	/*
 	 * Recover statements starting from the oldest one.
 	 * Key order doesn't matter so we simply iterate over
@@ -4127,6 +4153,18 @@ vy_build_recover_mem(struct vy_lsm *lsm, struct vy_lsm *pk, struct vy_mem *mem)
 static int
 vy_build_recover(struct vy_env *env, struct vy_lsm *lsm, struct vy_lsm *pk)
 {
+	if (lsm->dump_lsn < 0) {
+		/*
+		 * The new index was never dumped, because the space's empty
+		 * so there's nothing to do.
+		 *
+		 * Note: the primary index may still have some cancelling
+		 * each other statements; we shouldn't try to apply them,
+		 * because they may be incompatible with the new index.
+		 */
+		return 0;
+	}
+
 	int rc = 0;
 	struct vy_mem *mem;
 	size_t mem_used_before, mem_used_after;
@@ -4391,13 +4429,6 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 	 */
 	if (space->index_count <= 1)
 		return 0;
-	/*
-	 * Wait for memory quota if necessary before starting to
-	 * process the batch (we can't yield between statements).
-	 */
-	struct vy_env *env = vy_env(space->engine);
-	if (is_first_statement)
-		vy_quota_wait(&env->quota, VY_QUOTA_CONSUMER_COMPACTION);
 
 	/* Create the deferred DELETE statement. */
 	struct vy_lsm *pk = vy_lsm(space->index[0]);
@@ -4421,6 +4452,7 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 
 	/* Insert the deferred DELETE into secondary indexes. */
 	int rc = 0;
+	struct vy_env *env = vy_env(space->engine);
 	size_t mem_used_before = lsregion_used(&env->mem_env.allocator);
 	struct tuple *region_stmt = NULL;
 	for (uint32_t i = 1; i < space->index_count; i++) {
@@ -4525,6 +4557,7 @@ static const struct engine_vtab vinyl_engine_vtab = {
 	/* .bootstrap = */ vinyl_engine_bootstrap,
 	/* .begin_initial_recovery = */ vinyl_engine_begin_initial_recovery,
 	/* .begin_final_recovery = */ vinyl_engine_begin_final_recovery,
+	/* .begin_hot_standby = */ generic_engine_begin_hot_standby,
 	/* .end_recovery = */ vinyl_engine_end_recovery,
 	/* .begin_checkpoint = */ vinyl_engine_begin_checkpoint,
 	/* .wait_checkpoint = */ vinyl_engine_wait_checkpoint,
@@ -4576,6 +4609,7 @@ static const struct index_vtab vinyl_index_vtab = {
 	/* .max = */ generic_index_max,
 	/* .random = */ generic_index_random,
 	/* .count = */ generic_index_count,
+	/* .get_raw = */ generic_index_get_raw,
 	/* .get = */ vinyl_index_get,
 	/* .replace = */ generic_index_replace,
 	/* .create_iterator = */ vinyl_index_create_iterator,

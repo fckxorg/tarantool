@@ -41,9 +41,9 @@
 #include "lib/core/mp_extension_types.h"
 #include "lua/error.h"
 
+#include "datetime.h"
 #include "trivia/util.h"
 #include "diag.h"
-#include "serializer_opts.h"
 #include "lua/utils.h"
 
 int luaL_map_metatable_ref = LUA_REFNIL;
@@ -75,6 +75,7 @@ static struct {
 	OPTION(LUA_TBOOLEAN, encode_load_metatables, 1),
 	OPTION(LUA_TBOOLEAN, encode_use_tostring, 0),
 	OPTION(LUA_TBOOLEAN, encode_invalid_as_nil, 0),
+	OPTION(LUA_TBOOLEAN, encode_error_as_ext, 1),
 	OPTION(LUA_TBOOLEAN, decode_invalid_numbers, 1),
 	OPTION(LUA_TBOOLEAN, decode_save_metatables, 1),
 	OPTION(LUA_TNUMBER,  decode_max_depth, 128),
@@ -275,7 +276,7 @@ lua_field_inspect_ucdata(struct lua_State *L, struct luaL_serializer *cfg,
 		lua_pcall(L, 1, 1, 0);
 		/* replace obj with the unpacked value */
 		lua_replace(L, idx);
-		if (luaL_tofield(L, cfg, NULL, idx, field) < 0)
+		if (luaL_tofield(L, cfg, idx, field) < 0)
 			luaT_error(L);
 	} /* else ignore lua_gettable exceptions */
 	lua_settop(L, top); /* remove temporary objects */
@@ -320,7 +321,7 @@ lua_field_try_serialize(struct lua_State *L, struct luaL_serializer *cfg,
 			diag_set(LuajitError, lua_tostring(L, -1));
 			return -1;
 		}
-		if (luaL_tofield(L, cfg, NULL, -1, field) != 0)
+		if (luaL_tofield(L, cfg, -1, field) != 0)
 			return -1;
 		lua_replace(L, idx);
 		return 0;
@@ -424,13 +425,12 @@ lua_field_tostring(struct lua_State *L, struct luaL_serializer *cfg, int idx,
 	lua_call(L, 1, 1);
 	lua_replace(L, idx);
 	lua_settop(L, top);
-	if (luaL_tofield(L, cfg, NULL, idx, field) < 0)
+	if (luaL_tofield(L, cfg, idx, field) < 0)
 		luaT_error(L);
 }
 
 int
-luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg,
-	     const struct serializer_opts *opts, int index,
+luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg, int index,
 	     struct luaL_field *field)
 {
 	if (index < 0)
@@ -540,10 +540,12 @@ luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg,
 			} else if (cd->ctypeid == CTID_UUID) {
 				field->ext_type = MP_UUID;
 				field->uuidval = (struct tt_uuid *) cdata;
-			} else if (cd->ctypeid == CTID_CONST_STRUCT_ERROR_REF &&
-				   opts != NULL &&
-				   opts->error_marshaling_enabled) {
+			} else if (cd->ctypeid == CTID_CONST_STRUCT_ERROR_REF) {
 				field->ext_type = MP_ERROR;
+				field->errorval = *(struct error **)cdata;
+			} else if (cd->ctypeid == CTID_DATETIME) {
+				field->ext_type = MP_DATETIME;
+				field->dateval = (struct datetime *)cdata;
 			} else {
 				field->ext_type = MP_UNKNOWN_EXTENSION;
 			}

@@ -31,6 +31,7 @@
 #include "xrow_update_field.h"
 #include "msgpuck.h"
 #include "fiber.h"
+#include "schema_def.h"
 #include "tuple_format.h"
 
 /**
@@ -369,6 +370,17 @@ xrow_update_op_do_array_insert(struct xrow_update_op *op,
 
 	struct xrow_update_rope *rope = field->array.rope;
 	uint32_t size = xrow_update_rope_size(rope);
+	int64_t tuple_field_cnt_lim = BOX_FIELD_MAX;
+	struct errinj *err_inj =
+		errinj(ERRINJ_TUPLE_FIELD_COUNT_LIMIT, ERRINJ_INT);
+	if (err_inj != NULL && err_inj->iparam > 0) {
+		tuple_field_cnt_lim = err_inj->iparam;
+	}
+	assert(size <= tuple_field_cnt_lim);
+	if (size == tuple_field_cnt_lim) {
+		diag_set(ClientError, ER_TUPLE_FIELD_COUNT_LIMIT);
+		return -1;
+	}
 	if (xrow_update_op_adjust_field_no(op, size + 1) != 0)
 		return -1;
 

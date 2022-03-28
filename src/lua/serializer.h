@@ -52,11 +52,11 @@ extern "C" {
 #include <lauxlib.h>
 
 #include "trigger.h"
+#include "lib/core/datetime.h"
 #include "lib/core/decimal.h" /* decimal_t */
 #include "lib/core/mp_extension_types.h"
 #include "lua/error.h"
 
-struct serializer_opts;
 struct lua_State;
 struct tt_uuid;
 
@@ -133,6 +133,8 @@ struct luaL_serializer {
 	int encode_use_tostring;
 	/** Use NULL for all unrecognizable types */
 	int encode_invalid_as_nil;
+	/** Encode error object as MP_ERROR extension (MsgPack only). */
+	int encode_error_as_ext;
 
 	/** Enables decoding NaN and Inf numbers */
 	int decode_invalid_numbers;
@@ -188,6 +190,12 @@ luaL_checkserializer(struct lua_State *L)
 		luaL_checkudata(L, lua_upvalueindex(1), LUAL_SERIALIZER);
 }
 
+static inline void
+luaL_pushserializer(struct lua_State *L)
+{
+	lua_pushvalue(L, lua_upvalueindex(1));
+}
+
 /**
  * Initialize serializer with default parameters.
  * @param cfg Serializer to inherit configuration.
@@ -223,6 +231,8 @@ struct luaL_field {
 		uint32_t size;
 		decimal_t *decval;
 		struct tt_uuid *uuidval;
+		struct error *errorval;
+		struct datetime *dateval;
 	};
 	enum mp_type type;
 	/* subtypes of MP_EXT */
@@ -264,7 +274,6 @@ struct luaL_field {
  *
  * @param L stack
  * @param cfg configuration
- * @param opts the Lua serializer additional options.
  * @param index stack index
  * @param field conversion result
  *
@@ -272,8 +281,7 @@ struct luaL_field {
  * @retval -1 Error.
  */
 int
-luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg,
-	     const struct serializer_opts *opts, int index,
+luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg, int index,
 	     struct luaL_field *field);
 
 /**
@@ -312,7 +320,7 @@ static inline void
 luaL_checkfield(struct lua_State *L, struct luaL_serializer *cfg, int idx,
 		struct luaL_field *field)
 {
-	if (luaL_tofield(L, cfg, NULL, idx, field) < 0)
+	if (luaL_tofield(L, cfg, idx, field) < 0)
 		luaT_error(L);
 	if (field->type != MP_EXT || field->ext_type != MP_UNKNOWN_EXTENSION)
 		return;

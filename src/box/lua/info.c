@@ -99,7 +99,7 @@ lbox_pushapplier(lua_State *L, struct applier *applier)
 	lua_pushstring(L, status);
 	lua_settable(L, -3);
 
-	if (applier->reader) {
+	if (applier->fiber != NULL) {
 		lua_pushstring(L, "lag");
 		lua_pushnumber(L, applier->lag);
 		lua_settable(L, -3);
@@ -121,7 +121,7 @@ lbox_pushapplier(lua_State *L, struct applier *applier)
 		lua_pushlstring(L, name, total);
 		lua_settable(L, -3);
 
-		struct error *e = diag_last_error(&applier->reader->diag);
+		struct error *e = diag_last_error(&applier->fiber->diag);
 		if (e != NULL)
 			lbox_push_replication_error_message(L, e, -1);
 	}
@@ -321,6 +321,14 @@ lbox_info_ro(struct lua_State *L)
 	return 1;
 }
 
+static int
+lbox_info_ro_reason(struct lua_State *L)
+{
+	/* Even if NULL, it works like lua_pushnil(), so this is fine. */
+	lua_pushstring(L, box_ro_reason());
+	return 1;
+}
+
 /*
  * Tarantool 1.6.x compat
  */
@@ -405,8 +413,10 @@ lbox_info_memory_call(struct lua_State *L)
 	luaL_pushuint64(L, stat.tx);
 	lua_settable(L, -3);
 
+	struct iproto_stats stats;
+	iproto_stats_get(&stats);
 	lua_pushstring(L, "net");
-	luaL_pushuint64(L, iproto_mem_used());
+	luaL_pushuint64(L, stats.mem_used);
 	lua_settable(L, -3);
 
 	lua_pushstring(L, "lua");
@@ -582,9 +592,21 @@ lbox_info_sql(struct lua_State *L)
 static int
 lbox_info_listen(struct lua_State *L)
 {
-	/* NULL is ok, no need to check. */
+	int count = iproto_addr_count();
+	if (count == 0) {
+		lua_pushnil(L);
+		return 1;
+	}
 	char addrbuf[SERVICE_NAME_MAXLEN];
-	lua_pushstring(L, iproto_bound_address(addrbuf));
+	if (count == 1) {
+		lua_pushstring(L, iproto_addr_str(addrbuf, 0));
+		return 1;
+	}
+	lua_createtable(L, count, 0);
+	for (int i = 0; i < count; i++) {
+		lua_pushstring(L, iproto_addr_str(addrbuf, i));
+		lua_rawseti(L, -2, i + 1);
+	}
 	return 1;
 }
 
@@ -615,11 +637,13 @@ lbox_info_synchro(struct lua_State *L)
 
 	/* Queue information. */
 	struct txn_limbo *queue = &txn_limbo;
-	lua_createtable(L, 0, 2);
+	lua_createtable(L, 0, 3);
 	lua_pushnumber(L, queue->len);
 	lua_setfield(L, -2, "len");
 	lua_pushnumber(L, queue->owner_id);
 	lua_setfield(L, -2, "owner");
+	lua_pushboolean(L, latch_is_locked(&queue->promote_latch));
+	lua_setfield(L, -2, "busy");
 	lua_setfield(L, -2, "queue");
 
 	return 1;
@@ -633,6 +657,7 @@ static const struct luaL_Reg lbox_info_dynamic_meta[] = {
 	{"signature", lbox_info_signature},
 	{"vclock", lbox_info_vclock},
 	{"ro", lbox_info_ro},
+	{"ro_reason", lbox_info_ro_reason},
 	{"replication", lbox_info_replication},
 	{"replication_anon", lbox_info_replication_anon},
 	{"status", lbox_info_status},

@@ -3,7 +3,7 @@
 #
 
 DOCKER_IMAGE?=packpack/packpack:debian-stretch
-DOCKER_IMAGE_TARANTOOL="registry.gitlab.com/tarantool/tarantool/testing/debian-stretch:latest"
+DOCKER_IMAGE_TARANTOOL=tarantool/testing:debian-stretch
 TEST_RUN_EXTRA_PARAMS?=
 MAX_FILES?=65534
 MAX_PROC?=2500
@@ -161,7 +161,19 @@ test_ubuntu_ghactions: deps_ubuntu_ghactions test_debian_no_deps
 
 test_debian_clang11: deps_debian deps_buster_clang_11 test_debian_no_deps
 
-# Debug with coverage
+# Debug
+
+build_debug_debian:
+	cmake . -DCMAKE_BUILD_TYPE=Debug
+	make -j
+
+test_debug_debian_no_deps: build_debug_debian
+	make LuaJIT-test
+	cd test && ./test-run.py --vardir ${VARDIR} --force $(TEST_RUN_EXTRA_PARAMS)
+
+debug_ubuntu_ghactions: deps_ubuntu_ghactions test_debug_debian_no_deps
+
+# Coverage
 
 build_coverage_debian:
 	cmake . -DCMAKE_BUILD_TYPE=Debug -DENABLE_GCOV=ON
@@ -270,6 +282,7 @@ test_static_build_cmake_linux: deps_tests
 
 test_debian_docker_luacheck:
 	docker run                       \
+		--rm                         \
 		-w ${OOS_SRC_PATH}           \
 		-v ${PWD}:${OOS_SRC_PATH}    \
 		--privileged                 \
@@ -282,7 +295,7 @@ test_debian_docker_luacheck:
 test_debian_install_luacheck:
 	sudo apt update -y
 	sudo apt install -y lua5.1 luarocks
-	sudo luarocks install luacheck
+	sudo luarocks install luacheck 0.25.0
 
 test_debian_luacheck: test_debian_install_luacheck configure_debian
 	make luacheck
@@ -309,7 +322,9 @@ test_oos_build:
 	# Our testing expects that the init process (PID 1) will
 	# reap orphan processes. At least the following test leans
 	# on it: app-tap/gh-4983-tnt-e-assert-false-hangs.test.lua.
-	docker run --network=host -w ${OOS_SRC_PATH} \
+	docker run \
+		--network=host -w ${OOS_SRC_PATH} \
+		--rm \
 		--init \
 		--mount type=bind,source="${PWD}",target=${OOS_SRC_PATH},readonly,bind-propagation=rslave \
 		-v ${PWD}/artifacts:${OOS_BUILD_PATH}/test/var/artifacts \
@@ -330,6 +345,7 @@ build_odroid_arm64:
 
 test_odroid_arm64_no_deps: build_odroid_arm64
 	make LuaJIT-test
+	cd test && ./test-run.py --vardir ${VARDIR} --force $(TEST_RUN_EXTRA_PARAMS)
 
 test_odroid_arm64: deps_odroid_arm64 test_odroid_arm64_no_deps
 
@@ -340,7 +356,7 @@ test_odroid_arm64: deps_odroid_arm64 test_odroid_arm64_no_deps
 # FIXME: Temporary pinned python3 to specific version (i.e. python@3.8) to
 # avoid gevent package installation failure described in gevent/gevent#1721.
 # Revert this back when the issue is resolved.
-OSX_PKGS=openssl readline curl icu4c libiconv zlib cmake python@3.8
+OSX_PKGS=openssl@1.1 readline curl icu4c libiconv zlib cmake python@3.8
 
 deps_osx:
 	# install brew using command from Homebrew repository instructions:
@@ -444,7 +460,8 @@ test_static_build_cmake_osx_github_actions: base_deps_osx_github_actions test_st
 
 deps_freebsd:
 	sudo pkg install -y git cmake gmake icu libiconv \
-		python27 py27-yaml py27-six py27-gevent
+		python38 py38-yaml py38-six py38-gevent
+	which python3 || sudo ln -s /usr/local/bin/python3.8 /usr/local/bin/python3
 
 build_freebsd:
 	if [ "$$(swapctl -l | wc -l)" != "1" ]; then sudo swapoff -a ; fi ; swapctl -l
@@ -453,7 +470,7 @@ build_freebsd:
 
 test_freebsd_no_deps: build_freebsd
 	make LuaJIT-test
-	cd test && python2.7 test-run.py --force $(TEST_RUN_EXTRA_PARAMS)
+	cd test && ./test-run.py --vardir ${VARDIR} --force $(TEST_RUN_EXTRA_PARAMS)
 
 test_freebsd: deps_freebsd test_freebsd_no_deps
 

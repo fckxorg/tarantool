@@ -211,7 +211,7 @@ sql_cursor_seek(struct BtCursor *cur, struct Mem *mems, uint32_t len, int *res)
 	struct region *region = &fiber()->gc;
 	size_t used = region_used(region);
 	uint32_t size;
-	const char *tuple = sql_vdbe_mem_encode_tuple(mems, len, &size, region);
+	const char *tuple = mem_encode_array(mems, len, &size, region);
 	if (tuple == NULL)
 		return -1;
 	if (key_alloc(cur, size) != 0)
@@ -347,6 +347,7 @@ sql_ephemeral_space_new(const struct sql_space_info *info)
 	char *names = (char *)fields + names_indent;
 
 	for (uint32_t i = 0; i < info->field_count; ++i) {
+		fields[i] = field_def_default;
 		fields[i].name = names;
 		sprintf(names, "_COLUMN_%d", i);
 		names += strlen(fields[i].name) + 1;
@@ -356,6 +357,7 @@ sql_ephemeral_space_new(const struct sql_space_info *info)
 		fields[i].default_value_expr = NULL;
 		fields[i].type = info->types[i];
 		fields[i].coll_id = info->coll_ids[i];
+		fields[i].compression_type = COMPRESSION_TYPE_NONE;
 	}
 	for (uint32_t i = 0; i < part_count; ++i) {
 		uint32_t j = info->parts == NULL ? i : info->parts[i];
@@ -778,7 +780,25 @@ out:
 	if (key != NULL) {
 		int new_rc = sqlVdbeRecordCompareMsgpack(key, unpacked);
 		region_truncate(&fiber()->gc, original_size);
-		assert(rc == new_rc);
+		/*
+		 * Here we compare two results from memcmp() alike
+		 * calls. A particular implementation depends on
+		 * a type of msgpack values to compare. For some
+		 * of them we actually call memcmp().
+		 *
+		 * memcmp() only guarantees that a result will be
+		 * less than zero, zero or more than zero. It
+		 * DOES NOT guarantee that the result will be
+		 * subtraction of the first non-equal bytes or
+		 * something else about the result aside of its
+		 * sign.
+		 *
+		 * So we don't compare `rc` and `new_rc` for
+		 * equivalence.
+		 */
+		assert((rc == 0 && new_rc == 0) ||
+		       (rc < 0 && new_rc < 0) ||
+		       (rc > 0 && new_rc > 0));
 	}
 #endif
 	return rc;

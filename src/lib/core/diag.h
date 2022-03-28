@@ -36,6 +36,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+
+#include "error_payload.h"
 #include "say.h"
 
 #if defined(__cplusplus)
@@ -87,6 +89,10 @@ struct error {
 	 * to the standard library, then it is 0.
 	 */
 	int saved_errno;
+	/** Error code. Shortest possible description of error's reason. */
+	int code;
+	/** Key-value storage with error's dynamic fields. */
+	struct error_payload payload;
 	/** Line number. */
 	unsigned line;
 	/* Source file name. */
@@ -117,6 +123,93 @@ error_ref(struct error *e);
 
 void
 error_unref(struct error *e);
+
+static inline const char *
+error_get_str(const struct error *e, const char *name)
+{
+	return error_payload_get_str(&e->payload, name);
+}
+
+static inline void
+error_set_str(struct error *e, const char *name, const char *value)
+{
+	error_payload_set_str(&e->payload, name, value);
+}
+
+static inline bool
+error_get_uint(const struct error *e, const char *name, uint64_t *value)
+{
+	return error_payload_get_uint(&e->payload, name, value);
+}
+
+static inline void
+error_set_uint(struct error *e, const char *name, uint64_t value)
+{
+	error_payload_set_uint(&e->payload, name, value);
+}
+
+static inline bool
+error_get_int(const struct error *e, const char *name, int64_t *value)
+{
+	return error_payload_get_int(&e->payload, name, value);
+}
+
+static inline void
+error_set_int(struct error *e, const char *name, int64_t value)
+{
+	error_payload_set_int(&e->payload, name, value);
+}
+
+static inline bool
+error_get_double(const struct error *e, const char *name, double *value)
+{
+	return error_payload_get_double(&e->payload, name, value);
+}
+
+static inline void
+error_set_double(struct error *e, const char *name, double value)
+{
+	error_payload_set_double(&e->payload, name, value);
+}
+
+static inline bool
+error_get_bool(const struct error *e, const char *name, bool *value)
+{
+	return error_payload_get_bool(&e->payload, name, value);
+}
+
+static inline void
+error_set_bool(struct error *e, const char *name, bool value)
+{
+	error_payload_set_bool(&e->payload, name, value);
+}
+
+static inline bool
+error_get_uuid(const struct error *e, const char *name, struct tt_uuid *value)
+{
+	return error_payload_get_uuid(&e->payload, name, value);
+}
+
+static inline void
+error_set_uuid(struct error *e, const char *name, const struct tt_uuid *value)
+{
+	error_payload_set_uuid(&e->payload, name, value);
+}
+
+static inline void
+error_clear_field(struct error *e, const char *name)
+{
+	error_payload_clear(&e->payload, name);
+}
+
+static inline void
+error_move_payload(struct error *e, struct error_payload *src)
+{
+	error_payload_move(&e->payload, src);
+}
+
+const struct error_field *
+error_find_field(const struct error *e, const char *name);
 
 /**
  * Unlink error from its effect. For instance:
@@ -172,10 +265,16 @@ error_create(struct error *e,
 	     unsigned line);
 
 void
+error_set_location(struct error *e, const char *file, int line);
+
+void
 error_format_msg(struct error *e, const char *format, ...);
 
 void
 error_vformat_msg(struct error *e, const char *format, va_list ap);
+
+void
+error_append_msg(struct error *e, const char *format, ...);
 
 /**
  * Diagnostics Area - a container for errors
@@ -347,7 +446,7 @@ struct error *
 BuildSocketError(const char *file, unsigned line, const char *socketname,
 		 const char *format, ...);
 
-#define diag_set_detailed(file, line, class, ...) do {			\
+#define diag_set_detailed(file, line, class, ...) ({			\
 	/* Preserve the original errno. */                              \
 	int save_errno = errno;                                         \
 	say_debug("%s at %s:%i", #class, file, line);			\
@@ -356,19 +455,21 @@ BuildSocketError(const char *file, unsigned line, const char *socketname,
 	diag_set_error(diag_get(), e);					\
 	/* Restore the errno which might have been reset.  */           \
 	errno = save_errno;                                             \
-} while (0)
+	e;								\
+})
 
 #define diag_set(...)							\
 	diag_set_detailed(__FILE__, __LINE__, __VA_ARGS__)
 
-#define diag_add(class, ...) do {					\
+#define diag_add(class, ...) ({						\
 	int save_errno = errno;						\
 	say_debug("%s at %s:%i", #class, __FILE__, __LINE__);		\
 	struct error *e;						\
 	e = Build##class(__FILE__, __LINE__, ##__VA_ARGS__);		\
 	diag_add_error(diag_get(), e);					\
 	errno = save_errno;						\
-} while (0)
+	e;								\
+})
 
 #if defined(__cplusplus)
 } /* extern "C" */

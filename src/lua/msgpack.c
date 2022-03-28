@@ -42,13 +42,52 @@
 #include <small/region.h>
 #include <small/ibuf.h>
 
+#include "decimal.h" /* decimal_unpack() */
 #include "lua/decimal.h" /* lua_pushdecimal() */
-#include "lib/core/decimal.h" /* decimal_unpack() */
-#include "lib/uuid/mp_uuid.h" /* mp_decode_uuid() */
-#include "lib/core/mp_extension_types.h"
+#include "mp_extension_types.h"
+#include "mp_uuid.h" /* mp_decode_uuid() */
+#include "mp_datetime.h"
 
 #include "cord_buf.h"
 #include <fiber.h>
+
+/**
+ * Lua object that stores raw msgpack data and implements methods for decoding
+ * it in Lua. Allocated as Lua userdata.
+ */
+struct luamp_object {
+	/** Pointer to the serializer used for decoding data. */
+	struct luaL_serializer *cfg;
+	/** Reference to the serializer. */
+	int cfg_ref;
+	/**
+	 * If this object doesn't own data, but instead points to data of
+	 * another object (i.e. it was created by an iterator), then this
+	 * member stores a Lua reference to the original object. Otherwise,
+	 * it's set to LUA_NOREF.
+	 */
+	int data_ref;
+	/** Pointer to msgpack data. */
+	const char *data;
+	/** Pointer to the end of msgpack data. */
+	const char *data_end;
+};
+
+static const char luamp_object_typename[] = "msgpack.object";
+
+/**
+ * Iterator over a msgpack object. Allocated as Lua userdata.
+ */
+struct luamp_iterator {
+	/** Pointer to the source object. */
+	struct luamp_object *source;
+	/** Lua reference to the source object. */
+	int source_ref;
+	/** Current iterator position in the source object data. */
+	const char *pos;
+};
+
+static const char luamp_iterator_typename[] = "msgpack.iterator";
 
 void
 luamp_error(void *error_ctx)
@@ -58,6 +97,18 @@ luamp_error(void *error_ctx)
 }
 
 struct luaL_serializer *luaL_msgpack_default = NULL;
+
+const char *
+luamp_get(struct lua_State *L, int idx, size_t *data_len)
+{
+	struct luamp_object *obj;
+	obj = luaL_testudata(L, idx, luamp_object_typename);
+	if (obj != NULL) {
+		*data_len = obj->data_end - obj->data;
+		return obj->data;
+	}
+	return NULL;
+}
 
 static enum mp_type
 luamp_encode_extension_default(struct lua_State *L, int idx,
@@ -112,11 +163,12 @@ luamp_set_decode_extension(luamp_decode_extension_f handler)
 
 enum mp_type
 luamp_encode_r(struct lua_State *L, struct luaL_serializer *cfg,
-	       const struct serializer_opts *opts, struct mpstream *stream,
-	       struct luaL_field *field, int level)
+	       struct mpstream *stream, struct luaL_field *field, int level)
 {
 	int top = lua_gettop(L);
 	enum mp_type type;
+	const char *data;
+	size_t data_len;
 
 restart: /* used by MP_EXT of unidentified subtype */
 	switch (field->type) {
@@ -158,13 +210,13 @@ restart: /* used by MP_EXT of unidentified subtype */
 		lua_pushnil(L);  /* first key */
 		while (lua_next(L, top) != 0) {
 			lua_pushvalue(L, -2); /* push a copy of key to top */
-			if (luaL_tofield(L, cfg, opts, lua_gettop(L), field) < 0)
+			if (luaL_tofield(L, cfg, lua_gettop(L), field) < 0)
 				return luaT_error(L);
-			luamp_encode_r(L, cfg, opts, stream, field, level + 1);
+			luamp_encode_r(L, cfg, stream, field, level + 1);
 			lua_pop(L, 1); /* pop a copy of key */
-			if (luaL_tofield(L, cfg, opts, lua_gettop(L), field) < 0)
+			if (luaL_tofield(L, cfg, lua_gettop(L), field) < 0)
 				return luaT_error(L);
-			luamp_encode_r(L, cfg, opts, stream, field, level + 1);
+			luamp_encode_r(L, cfg, stream, field, level + 1);
 			lua_pop(L, 1); /* pop value */
 		}
 		assert(lua_gettop(L) == top);
@@ -183,9 +235,9 @@ restart: /* used by MP_EXT of unidentified subtype */
 		mpstream_encode_array(stream, size);
 		for (uint32_t i = 0; i < size; i++) {
 			lua_rawgeti(L, top, i + 1);
-			if (luaL_tofield(L, cfg, opts, top + 1, field) < 0)
+			if (luaL_tofield(L, cfg, top + 1, field) < 0)
 				return luaT_error(L);
-			luamp_encode_r(L, cfg, opts, stream, field, level + 1);
+			luamp_encode_r(L, cfg, stream, field, level + 1);
 			lua_pop(L, 1);
 		}
 		assert(lua_gettop(L) == top);
@@ -199,12 +251,27 @@ restart: /* used by MP_EXT of unidentified subtype */
 			mpstream_encode_uuid(stream, field->uuidval);
 			break;
 		case MP_ERROR:
+			if (!cfg->encode_error_as_ext) {
+				field->ext_type = MP_UNKNOWN_EXTENSION;
+				goto convert;
+			}
 			return luamp_encode_extension(L, top, stream);
+		case MP_DATETIME:
+			mpstream_encode_datetime(stream, field->dateval);
+			break;
 		default:
+			data = luamp_get(L, top, &data_len);
+			if (data != NULL) {
+				mpstream_memcpy(stream, data, data_len);
+				return mp_typeof(*data);
+			}
 			/* Run trigger if type can't be encoded */
 			type = luamp_encode_extension(L, top, stream);
-			if (type != MP_EXT)
-				return type; /* Value has been packed by the trigger */
+			if (type != MP_EXT) {
+				/* Value has been packed by the trigger */
+				return type;
+			}
+convert:
 			/* Try to convert value to serializable type */
 			luaL_convertfield(L, cfg, top, field);
 			/* handled by luaL_convertfield */
@@ -218,8 +285,7 @@ restart: /* used by MP_EXT of unidentified subtype */
 
 enum mp_type
 luamp_encode(struct lua_State *L, struct luaL_serializer *cfg,
-	     const struct serializer_opts *opts, struct mpstream *stream,
-	     int index)
+	     struct mpstream *stream, int index)
 {
 	int top = lua_gettop(L);
 	if (index < 0)
@@ -231,9 +297,9 @@ luamp_encode(struct lua_State *L, struct luaL_serializer *cfg,
 	}
 
 	struct luaL_field field;
-	if (luaL_tofield(L, cfg, opts, lua_gettop(L), &field) < 0)
+	if (luaL_tofield(L, cfg, lua_gettop(L), &field) < 0)
 		return luaT_error(L);
-	enum mp_type top_type = luamp_encode_r(L, cfg, opts, stream, &field, 0);
+	enum mp_type top_type = luamp_encode_r(L, cfg, stream, &field, 0);
 
 	if (!on_top) {
 		lua_remove(L, top + 1); /* remove a value copy */
@@ -333,6 +399,14 @@ luamp_decode(struct lua_State *L, struct luaL_serializer *cfg,
 				goto ext_decode_err;
 			return;
 		}
+		case MP_DATETIME:
+		{
+			struct datetime *date = luaT_pushdatetime(L);
+			date = datetime_unpack(data, len, date);
+			if (date == NULL)
+				goto ext_decode_err;
+			return;
+		}
 		default:
 			/* reset data to the extension header */
 			*data = svp;
@@ -374,7 +448,7 @@ lua_msgpack_encode(lua_State *L)
 	mpstream_init(&stream, buf, ibuf_reserve_cb, ibuf_alloc_cb,
 		      luamp_error, L);
 
-	luamp_encode(L, cfg, NULL, &stream, 1);
+	luamp_encode(L, cfg, &stream, 1);
 	mpstream_flush(&stream);
 
 	if (index > 1) {
@@ -566,8 +640,341 @@ lua_decode_map_header(lua_State *L)
 	return 2;
 }
 
+/**
+ * Allocates a new msgpack object capable of storing msgpack data of the given
+ * size and pushes it to Lua stack. Returns a pointer to the object.
+ */
+static struct luamp_object *
+luamp_new_object(struct lua_State *L, size_t data_len)
+{
+	struct luamp_object *obj = lua_newuserdata(L, sizeof(*obj) + data_len);
+	obj->cfg = luaL_msgpack_default;
+	obj->cfg_ref = LUA_NOREF;
+	obj->data_ref = LUA_NOREF;
+	obj->data = (char *)obj + sizeof(*obj);
+	obj->data_end = obj->data + data_len;
+	luaL_getmetatable(L, luamp_object_typename);
+	lua_setmetatable(L, -2);
+	return obj;
+}
+
+void
+luamp_push(struct lua_State *L, const char *data, const char *data_end)
+{
+	size_t data_len = data_end - data;
+	struct luamp_object *obj = luamp_new_object(L, data_len);
+	memcpy((char *)obj->data, data, data_len);
+	assert(mp_check(&data, data_end) == 0 && data == data_end);
+}
+
+/**
+ * Creates a new msgpack object and pushes it to Lua stack.
+ * Takes a Lua object as the only argument.
+ */
 static int
-lua_msgpack_new(lua_State *L);
+lua_msgpack_object(struct lua_State *L)
+{
+	if (lua_gettop(L) != 1)
+		luaL_error(L, "msgpack.object: a Lua object expected");
+	struct luaL_serializer *cfg = luaL_checkserializer(L);
+	struct ibuf *buf = cord_ibuf_take();
+	struct mpstream stream;
+	mpstream_init(&stream, buf, ibuf_reserve_cb, ibuf_alloc_cb,
+		      luamp_error, L);
+	luamp_encode(L, cfg, &stream, 1);
+	mpstream_flush(&stream);
+	struct luamp_object *obj = luamp_new_object(L, ibuf_used(buf));
+	memcpy((char *)obj->data, buf->buf, obj->data_end - obj->data);
+	cord_ibuf_put(buf);
+	obj->cfg = cfg;
+	luaL_pushserializer(L);
+	obj->cfg_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	return 1;
+}
+
+/**
+ * Creates a new msgpack object from raw data and pushes it to Lua stack.
+ * The data is given either by a Lua string or by a char ptr and size.
+ */
+static int
+lua_msgpack_object_from_raw(struct lua_State *L)
+{
+	const char *data;
+	size_t data_len;
+	uint32_t cdata_type;
+	switch (lua_type(L, 1)) {
+	case LUA_TCDATA:
+		if (luaL_checkconstchar(L, 1, &data, &cdata_type) != 0)
+			goto error;
+		data_len = luaL_checkinteger(L, 2);
+		break;
+	case LUA_TSTRING:
+		data = lua_tolstring(L, 1, &data_len);
+		break;
+	default:
+		goto error;
+	}
+	const char *p = data;
+	const char *data_end = data + data_len;
+	if (mp_check(&p, data_end) != 0 || p != data_end) {
+		return luaL_error(L, "msgpack.object_from_raw: "
+				  "invalid MsgPack");
+	}
+	struct luamp_object *obj = luamp_new_object(L, data_len);
+	memcpy((char *)obj->data, data, data_len);
+	obj->cfg = luaL_checkserializer(L);
+	luaL_pushserializer(L);
+	obj->cfg_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	return 1;
+error:
+	return luaL_error(L, "msgpack.object_from_raw: "
+			  "a Lua string or 'char *' expected");
+}
+
+/**
+ * Takes a Lua value. Returns true if it's a msgpack object, false otherwise.
+ */
+static int
+lua_msgpack_is_object(struct lua_State *L)
+{
+	void *obj = luaL_testudata(L, 1, luamp_object_typename);
+	lua_pushboolean(L, obj != NULL);
+	return 1;
+}
+
+static inline struct luamp_object *
+luamp_check_object(struct lua_State *L, int idx)
+{
+	return luaL_checkudata(L, idx, luamp_object_typename);
+}
+
+static int
+luamp_object_gc(struct lua_State *L)
+{
+	struct luamp_object *obj = luamp_check_object(L, 1);
+	luaL_unref(L, LUA_REGISTRYINDEX, obj->cfg_ref);
+	luaL_unref(L, LUA_REGISTRYINDEX, obj->data_ref);
+	return 0;
+}
+
+static int
+luamp_object_tostring(struct lua_State *L)
+{
+	lua_pushstring(L, luamp_object_typename);
+	return 1;
+}
+
+/**
+ * Decodes the data stored in a msgpack object and pushes it to Lua stack.
+ * Takes a msgpack object as the only argument.
+ */
+static int
+luamp_object_decode(struct lua_State *L)
+{
+	struct luamp_object *obj = luamp_check_object(L, 1);
+	const char *data = obj->data;
+	luamp_decode(L, obj->cfg, &data);
+	assert(data == obj->data_end);
+	return 1;
+}
+
+/**
+ * Creates an iterator over a msgpack object and pushes it to Lua stack.
+ * Takes a msgpack object as the only argument.
+ */
+static int
+luamp_object_iterator(struct lua_State *L)
+{
+	struct luamp_object *obj = luamp_check_object(L, 1);
+	struct luamp_iterator *it = lua_newuserdata(L, sizeof(*it));
+	it->source = obj;
+	it->source_ref = LUA_NOREF;
+	it->pos = obj->data;
+	luaL_getmetatable(L, luamp_iterator_typename);
+	lua_setmetatable(L, -2);
+	lua_insert(L, 1);
+	it->source_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	return 1;
+}
+
+static inline struct luamp_iterator *
+luamp_check_iterator(struct lua_State *L, int idx)
+{
+	return luaL_checkudata(L, idx, luamp_iterator_typename);
+}
+
+static int
+luamp_iterator_gc(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	luaL_unref(L, LUA_REGISTRYINDEX, it->source_ref);
+	return 0;
+}
+
+static int
+luamp_iterator_tostring(struct lua_State *L)
+{
+	lua_pushstring(L, luamp_iterator_typename);
+	return 1;
+}
+
+/**
+ * Raises a Lua error if there's no data to decode.
+ */
+static inline void
+luamp_iterator_check_data_end(struct lua_State *L, struct luamp_iterator *it)
+{
+	assert(it->pos >= it->source->data);
+	assert(it->pos <= it->source->data_end);
+	if (it->pos == it->source->data_end)
+		luaL_error(L, "iteration ended");
+}
+
+/**
+ * Raises a Lua error if the type of the msgpack value under the iterator
+ * cursor doesn't match the expected type.
+ */
+static inline void
+luamp_iterator_check_data_type(struct lua_State *L, struct luamp_iterator *it,
+			       enum mp_type type)
+{
+	luamp_iterator_check_data_end(L, it);
+	if (mp_typeof(*it->pos) != type)
+		luaL_error(L, "unexpected msgpack type");
+}
+
+/**
+ * Decodes a msgpack array header and returns the number of elements in the
+ * array. After calling this function the iterator points to the first element
+ * of the array or to the value following the array if the array is empty.
+ * Raises a Lua error if the type of the value under the iterator cursor is not
+ * MP_ARRAY.
+ */
+static int
+luamp_iterator_decode_array_header(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	luamp_iterator_check_data_type(L, it, MP_ARRAY);
+	uint32_t len = mp_decode_array(&it->pos);
+	lua_pushinteger(L, len);
+	return 1;
+}
+
+/**
+ * Decodes a msgpack map header and returns the number of key value paris in
+ * the map. After calling this function the iterator points to the first
+ * key stored in the map or to the value following the map if the map is empty.
+ * Raises a Lua error if the type of the value under the iterator cursor is not
+ * MP_MAP.
+ */
+static int
+luamp_iterator_decode_map_header(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	luamp_iterator_check_data_type(L, it, MP_MAP);
+	uint32_t len = mp_decode_map(&it->pos);
+	lua_pushinteger(L, len);
+	return 1;
+}
+
+/**
+ * Decodes a msgpack value under the iterator cursor and advances the cursor.
+ * Returns a Lua object corresponding to the msgpack value. Raises a Lua error
+ * if there's no data to decode.
+ */
+static int
+luamp_iterator_decode(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	luamp_iterator_check_data_end(L, it);
+	luamp_decode(L, it->source->cfg, &it->pos);
+	return 1;
+}
+
+/**
+ * Returns a msgpack value under the iterator cursor as a msgpack object,
+ * (without decoding) and advances the cursor. The new msgpack object
+ * points to the data of the source object (references it). Raises a Lua error
+ * if there's no data to decode.
+ */
+static int
+luamp_iterator_take(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	luamp_iterator_check_data_end(L, it);
+	struct luamp_object *obj = luamp_new_object(L, 0);
+	obj->data = it->pos;
+	mp_next(&it->pos);
+	obj->data_end = it->pos;
+	lua_rawgeti(L, LUA_REGISTRYINDEX, it->source_ref);
+	obj->data_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	/* No need to take ref to cfg, because it's pinned via data_ref. */
+	obj->cfg = it->source->cfg;
+	return 1;
+}
+
+/**
+ * Copies the given number of msgpack values starting from the iterator cursor
+ * position to a new msgpack array object. On success returns the new msgpack
+ * object and advances the iterator cursor. If there isn't enough values to
+ * decode, raises a Lua error and leaves the iterator cursor unchanged.
+ *
+ * This function could be implemented in Lua like this:
+ *
+ *     function take_array(iter, count)
+ *         local array = {}
+ *         for _ = 1, count do
+ *             table.insert(array, iter:take())
+ *         end
+ *         return msgpack.object(array)
+ *     end
+ *
+ * Note, in contrast to iter.take(), this function actually copies the original
+ * object data (not just references it), because it has to prepend a msgpack
+ * array header to the copied data.
+ */
+static int
+luamp_iterator_take_array(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	if (lua_gettop(L) != 2)
+		return luaL_error(L, "Usage: iter:take_array(count)");
+	int count = luaL_checkinteger(L, 2);
+	if (count < 0)
+		return luaL_error(L, "count must be >= 0");
+	const char *start = it->pos;
+	const char *end = start;
+	for (int i = 0; i < count; i++) {
+		if (end == it->source->data_end)
+			return luaL_error(L, "iteration ended");
+		mp_next(&end);
+	}
+	size_t size = end - start;
+	struct luamp_object *obj = luamp_new_object(
+		L, mp_sizeof_array(count) + size);
+	char *data = (char *)obj->data;
+	data = mp_encode_array(data, count);
+	if (size > 0)
+		memcpy(data, start, size);
+	it->pos = end;
+	return 1;
+}
+
+/**
+ * Advances the iterator cursor by skipping one msgpack value under the cursor.
+ * Raises a Lua error if there's no data to skip.
+ */
+static int
+luamp_iterator_skip(struct lua_State *L)
+{
+	struct luamp_iterator *it = luamp_check_iterator(L, 1);
+	luamp_iterator_check_data_end(L, it);
+	mp_next(&it->pos);
+	return 0;
+}
+
+static int
+lua_msgpack_new(struct lua_State *L);
 
 static const luaL_Reg msgpacklib[] = {
 	{ "encode", lua_msgpack_encode },
@@ -576,6 +983,9 @@ static const luaL_Reg msgpacklib[] = {
 	{ "ibuf_decode", lua_ibuf_msgpack_decode },
 	{ "decode_array_header", lua_decode_array_header },
 	{ "decode_map_header", lua_decode_map_header },
+	{ "object", lua_msgpack_object },
+	{ "object_from_raw", lua_msgpack_object_from_raw },
+	{ "is_object", lua_msgpack_is_object },
 	{ "new", lua_msgpack_new },
 	{ NULL, NULL }
 };
@@ -590,6 +1000,28 @@ lua_msgpack_new(lua_State *L)
 LUALIB_API int
 luaopen_msgpack(lua_State *L)
 {
+	static const struct luaL_Reg luamp_object_meta[] = {
+		{ "__gc", luamp_object_gc },
+		{ "__tostring", luamp_object_tostring },
+		{ "decode", luamp_object_decode },
+		{ "iterator", luamp_object_iterator },
+		{ NULL, NULL }
+	};
+	luaL_register_type(L, luamp_object_typename, luamp_object_meta);
+
+	static const struct luaL_Reg luamp_iterator_meta[] = {
+		{ "__gc", luamp_iterator_gc },
+		{ "__tostring", luamp_iterator_tostring },
+		{ "decode_array_header", luamp_iterator_decode_array_header },
+		{ "decode_map_header", luamp_iterator_decode_map_header },
+		{ "decode", luamp_iterator_decode },
+		{ "take", luamp_iterator_take },
+		{ "take_array", luamp_iterator_take_array },
+		{ "skip", luamp_iterator_skip },
+		{ NULL, NULL }
+	};
+	luaL_register_type(L, luamp_iterator_typename, luamp_iterator_meta);
+
 	luaL_msgpack_default = luaL_newserializer(L, "msgpack", msgpacklib);
 	return 1;
 }

@@ -2,10 +2,34 @@ name: memtx_allocator_based_on_malloc
 
 on:
   push:
+    branches:
+      - 'master'
+      - '[0-9].[0-9]+'
+    tags:
+      - '**'
   pull_request:
-  repository_dispatch:
-    types: [backend_automation]
+    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
+
+concurrency:
+  # Update of a developer branch cancels the previously scheduled workflow
+  # run for this branch. However, the 'master' branch, release branch (1.10,
+  # 2.8, etc.), and tag workflow runs are never canceled.
+  #
+  # We use a trick here: define the concurrency group as 'workflow run ID' +
+  # 'workflow run attempt' because it is a unique combination for any run.
+  # So it effectively discards grouping.
+  #
+  # Important: we cannot use `github.sha` as a unique identifier because
+  # pushing a tag may cancel a run that works on a branch push event.
+  group: ${{ (
+    github.ref == 'refs/heads/master' ||
+    github.ref == 'refs/heads/1.10' ||
+    startsWith(github.ref, 'refs/heads/2.') ||
+    startsWith(github.ref, 'refs/tags/')) &&
+    format('{0}-{1}', github.run_id, github.run_attempt) ||
+    format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
 
 env:
   CI_MAKE: make -f .travis.mk
@@ -13,30 +37,22 @@ env:
 
 jobs:
   memtx_allocator_based_on_malloc:
-    # We want to run on external PRs, but not on our own internal PRs
-    # as they'll be run by the push to the branch.
-    if: ( github.event_name == 'push' ||
-        github.event.pull_request.head.repo.full_name != github.repository ) &&
-        ! endsWith(github.ref, '-notest')
+    # Run on push to the 'master' and release branches of tarantool/tarantool
+    # or on pull request if the 'full-ci' label is set.
+    if: github.repository == 'tarantool/tarantool' &&
+        ( github.event_name != 'pull_request' ||
+          contains(github.event.pull_request.labels.*.name, 'full-ci') )
 
-    runs-on: ubuntu-20.04
-
-    strategy:
-      fail-fast: false
-
-    # image built by .gitlab.mk instructions and targets from .travis.mk
-    container:
-      image: docker.io/tarantool/testing:debian-stretch
-      # Our testing expects that the init process (PID 1) will
-      # reap orphan processes. At least the following test leans
-      # on it: app-tap/gh-4983-tnt-e-assert-false-hangs.test.lua.
-      options: '--init'
+    runs-on: ubuntu-20.04-self-hosted
 
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v2.3.4
+        with:
+          fetch-depth: 0
+          submodules: recursive
       - uses: ./.github/actions/environment
       - name: test
-        run: ${CI_MAKE} test_debian_no_deps
+        run: ${CI_MAKE} test_ubuntu_ghactions
       - name: call action to send Telegram message on failure
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_CORE_TOKEN }}
@@ -49,4 +65,4 @@ jobs:
         with:
           name: memtx_allocator_based_on_malloc
           retention-days: 21
-          path: test/var/artifacts
+          path: ${{ env.VARDIR }}/artifacts

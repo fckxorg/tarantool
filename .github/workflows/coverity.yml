@@ -1,8 +1,6 @@
 name: coverity
 
 on:
-  repository_dispatch:
-    types: [backend_automation]
   workflow_dispatch:
   schedule:
     - cron:  '0 4 * * 6'
@@ -12,16 +10,9 @@ env:
 
 jobs:
   coverity:
-    # We want to run on external PRs, but not on our own internal PRs
-    # as they'll be run by the push to the branch.
-    if: ( github.event_name == 'push' ||
-        github.event.pull_request.head.repo.full_name != github.repository ) &&
-        ! endsWith(github.ref, '-notest')
+    if: github.repository == 'tarantool/tarantool'
 
     runs-on: ubuntu-18.04
-
-    strategy:
-      fail-fast: false
 
     # Image built by .gitlab.mk instructions and targets from .travis.mk.
     # Also additional installation of coverity tool installation check
@@ -34,12 +25,6 @@ jobs:
       options: '--init'
 
     steps:
-      # Permissions correction is needed for self-host runners,
-      # where work path is saved between different workflows runs.
-      - name: correct permissions in working directory
-        shell: bash
-        run: |
-          sudo chown -R $(id -u):$(id -g) .
       - uses: actions/checkout@v1
       - uses: ./.github/actions/environment
       - name: test

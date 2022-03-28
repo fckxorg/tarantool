@@ -3,6 +3,8 @@ test_run = require('test_run').new()
 test_run:cmd("restart server default")
 box.error.last() == nil
 
+test_run:cmd("push filter 'Failed to allocate [0-9]+' to 'Failed to allocate <NUM>'")
+
 errinj = box.error.injection
 net_box = require('net.box')
 
@@ -466,8 +468,8 @@ log = require('log')
 -- produced by a previous test.
 log.info(string.rep('a', 1000))
 _ = fiber.create(long_poll)
-while not test_run:grep_log('default', 'can not allocate memory for a new message', 1000) do fiber.sleep(0.01) end
-test_run:grep_log('default', 'stopping input on connection', 1000) ~= nil
+while not test_run:grep_log('default', 'can not allocate memory for a new message') do fiber.sleep(0.01) end
+test_run:grep_log('default', 'stopping input on connection') ~= nil
 started == 1
 continue = true
 errinj.set("ERRINJ_TESTING", false)

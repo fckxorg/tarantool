@@ -48,6 +48,7 @@
 #include "trivia/util.h"
 #include "mpstream/mpstream.h"
 #include "box/session.h"
+#include "box/iproto_features.h"
 
 /**
  * Handlers identifiers to obtain lua_Cfunction reference from
@@ -68,6 +69,28 @@ enum handlers {
 };
 
 static int execute_lua_refs[HANDLER_MAX];
+
+/**
+ * A copy of the default serializer with encode_error_as_ext option disabled.
+ * Changes to the default serializer are propagated via an update trigger.
+ * It is used for returning errors in the legacy format to clients that do
+ * not support the MP_ERROR MsgPack extension.
+ */
+static struct luaL_serializer call_serializer_no_error_ext;
+
+/**
+ * Returns a serializer that should be used for encoding CALL/EVAL result.
+ */
+static struct luaL_serializer *
+get_call_serializer(void)
+{
+	if (!iproto_features_test(&current_session()->meta.features,
+				  IPROTO_FEATURE_ERROR_EXTENSION)) {
+		return &call_serializer_no_error_ext;
+	} else {
+		return luaL_msgpack_default;
+	}
+}
 
 /**
  * A helper to find a Lua function by name and put it
@@ -196,7 +219,7 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 		 */
 		for (int i = 1; i <= nrets; ++i) {
 			struct luaL_field field;
-			if (luaL_tofield(L, cfg, NULL, i, &field) < 0)
+			if (luaL_tofield(L, cfg, i, &field) < 0)
 				return luaT_error(L);
 			struct tuple *tuple;
 			if (field.type == MP_EXT &&
@@ -210,11 +233,11 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 				 */
 				lua_pushvalue(L, i);
 				mpstream_encode_array(stream, 1);
-				luamp_encode_r(L, cfg, NULL, stream, &field, 0);
+				luamp_encode_r(L, cfg, stream, &field, 0);
 				lua_pop(L, 1);
 			} else {
 				/* `return ..., array, ...` */
-				luamp_encode(L, cfg, NULL, stream, i);
+				luamp_encode(L, cfg, stream, i);
 			}
 		}
 		return nrets;
@@ -225,7 +248,7 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 	 * Inspect the first result
 	 */
 	struct luaL_field root;
-	if (luaL_tofield(L, cfg, NULL, 1, &root) < 0)
+	if (luaL_tofield(L, cfg, 1, &root) < 0)
 		return luaT_error(L);
 	struct tuple *tuple;
 	if (root.type == MP_EXT && (tuple = luaT_istuple(L, 1)) != NULL) {
@@ -239,7 +262,7 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 		 */
 		mpstream_encode_array(stream, 1);
 		assert(lua_gettop(L) == 1);
-		luamp_encode_r(L, cfg, NULL, stream, &root, 0);
+		luamp_encode_r(L, cfg, stream, &root, 0);
 		return 1;
 	}
 
@@ -255,7 +278,7 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 	for (uint32_t t = 1; t <= root.size; t++) {
 		lua_rawgeti(L, 1, t);
 		struct luaL_field field;
-		if (luaL_tofield(L, cfg, NULL, -1, &field) < 0)
+		if (luaL_tofield(L, cfg, -1, &field) < 0)
 			return luaT_error(L);
 		if (field.type == MP_EXT && (tuple = luaT_istuple(L, -1))) {
 			tuple_to_mpstream(tuple, stream);
@@ -271,13 +294,13 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 				 * Encode the first field of tuple using
 				 * existing information from luaL_tofield
 				 */
-				luamp_encode_r(L, cfg, NULL, stream, &field, 0);
+				luamp_encode_r(L, cfg, stream, &field, 0);
 				lua_pop(L, 1);
 				assert(lua_gettop(L) == 1);
 				/* Encode remaining fields as usual */
 				for (uint32_t f = 2; f <= root.size; f++) {
 					lua_rawgeti(L, 1, f);
-					luamp_encode(L, cfg, NULL, stream, -1);
+					luamp_encode(L, cfg, stream, -1);
 					lua_pop(L, 1);
 				}
 				return 1;
@@ -287,10 +310,10 @@ luamp_encode_call_16(lua_State *L, struct luaL_serializer *cfg,
 			 *         { tuple/array, ..., { scalar }, ... }`
 			 */
 			mpstream_encode_array(stream, 1);
-			luamp_encode_r(L, cfg, NULL, stream, &field, 0);
+			luamp_encode_r(L, cfg, stream, &field, 0);
 		} else {
 			/* `return { tuple/array, ..., tuple/array, ... }` */
-			luamp_encode_r(L, cfg, NULL, stream, &field, 0);
+			luamp_encode_r(L, cfg, stream, &field, 0);
 		}
 		lua_pop(L, 1);
 		assert(lua_gettop(L) == 1);
@@ -318,8 +341,21 @@ struct execute_lua_ctx {
 	int lua_ref;
 	const char *name;
 	uint32_t name_len;
+	bool takes_raw_args;
 	struct port *args;
 };
+
+static inline void
+push_lua_args(lua_State *L, struct execute_lua_ctx *ctx)
+{
+	if (ctx->takes_raw_args) {
+		uint32_t size;
+		const char *data = port_get_msgpack(ctx->args, &size);
+		luamp_push(L, data, data + size);
+	} else {
+		port_dump_lua(ctx->args, L, true);
+	}
+}
 
 /**
  * Find a lua function by name and execute it. Used for body-less
@@ -344,7 +380,7 @@ execute_lua_call(lua_State *L)
 
 	/* Push the rest of args (a tuple). */
 	int top = lua_gettop(L);
-	port_dump_lua(ctx->args, L, true);
+	push_lua_args(L, ctx);
 	int arg_count = lua_gettop(L) - top;
 
 	lua_call(L, arg_count + oc - 1, LUA_MULTRET);
@@ -366,7 +402,7 @@ execute_lua_call_by_ref(lua_State *L)
 
 	/* Push the rest of args (a tuple). */
 	int top = lua_gettop(L);
-	port_dump_lua(ctx->args, L, true);
+	push_lua_args(L, ctx);
 	int arg_count = lua_gettop(L) - top;
 
 	lua_call(L, arg_count, LUA_MULTRET);
@@ -390,7 +426,7 @@ execute_lua_eval(lua_State *L)
 
 	/* Unpack arguments */
 	int top = lua_gettop(L);
-	port_dump_lua(ctx->args, L, true);
+	push_lua_args(L, ctx);
 	int arg_count = lua_gettop(L) - top;
 
 	/* Call compiled code */
@@ -428,12 +464,10 @@ encode_lua_call(lua_State *L)
 	 *
 	 * TODO: forbid explicit yield from __serialize or __index here
 	 */
-	struct luaL_serializer *cfg = luaL_msgpack_default;
-	const struct serializer_opts *opts =
-		&current_session()->meta.serializer_opts;
+	struct luaL_serializer *cfg = get_call_serializer();
 	const int size = lua_gettop(L);
 	for (int i = 1; i <= size; ++i)
-		luamp_encode(L, cfg, opts, ctx->stream, i);
+		luamp_encode(L, cfg, ctx->stream, i);
 	ctx->port->size = size;
 	mpstream_flush(ctx->stream);
 	return 0;
@@ -464,7 +498,7 @@ encode_lua_call_16(lua_State *L)
 	 *
 	 * TODO: forbid explicit yield from __serialize or __index here
 	 */
-	struct luaL_serializer *cfg = luaL_msgpack_default;
+	struct luaL_serializer *cfg = get_call_serializer();
 	ctx->port->size = luamp_encode_call_16(L, cfg, ctx->stream);
 	mpstream_flush(ctx->stream);
 	return 0;
@@ -640,6 +674,7 @@ box_lua_call(const char *name, uint32_t name_len,
 	ctx.name = name;
 	ctx.name_len = name_len;
 	ctx.args = args;
+	ctx.takes_raw_args = false;
 	return box_process_lua(HANDLER_CALL, &ctx, ret);
 }
 
@@ -651,6 +686,7 @@ box_lua_eval(const char *expr, uint32_t expr_len,
 	ctx.name = expr;
 	ctx.name_len = expr_len;
 	ctx.args = args;
+	ctx.takes_raw_args = false;
 	return box_process_lua(HANDLER_EVAL, &ctx, ret);
 }
 
@@ -832,7 +868,12 @@ func_lua_call(struct func *func, struct port *args, struct port *ret)
 {
 	assert(func != NULL && func->def->language == FUNC_LANGUAGE_LUA);
 	assert(func->vtab == &func_lua_vtab);
-	return box_lua_call(func->def->name, func->def->name_len, args, ret);
+	struct execute_lua_ctx ctx;
+	ctx.name = func->def->name;
+	ctx.name_len = func->def->name_len;
+	ctx.args = args;
+	ctx.takes_raw_args = func->def->opts.takes_raw_args;
+	return box_process_lua(HANDLER_CALL, &ctx, ret);
 }
 
 static struct func_vtab func_lua_vtab = {
@@ -867,6 +908,7 @@ func_persistent_lua_call(struct func *base, struct port *args, struct port *ret)
 	struct execute_lua_ctx ctx;
 	ctx.lua_ref = func->lua_ref;
 	ctx.args = args;
+	ctx.takes_raw_args = base->def->opts.takes_raw_args;
 	return box_process_lua(HANDLER_CALL_BY_REF, &ctx, ret);
 
 }
@@ -1002,6 +1044,9 @@ lbox_func_new(struct lua_State *L, struct func *func)
 	lua_pushstring(L, "is_multikey");
 	lua_pushboolean(L, func->def->opts.is_multikey);
 	lua_settable(L, top);
+	lua_pushstring(L, "takes_raw_args");
+	lua_pushboolean(L, func->def->opts.takes_raw_args);
+	lua_settable(L, top);
 	lua_pushstring(L, "is_sandboxed");
 	if (func->def->body != NULL)
 		lua_pushboolean(L, func->def->is_sandboxed);
@@ -1062,6 +1107,23 @@ lbox_func_new_or_delete(struct trigger *trigger, void *event)
 	return 0;
 }
 
+static void
+call_serializer_update_options(void)
+{
+	luaL_serializer_copy_options(&call_serializer_no_error_ext,
+				     luaL_msgpack_default);
+	call_serializer_no_error_ext.encode_error_as_ext = 0;
+}
+
+static int
+on_msgpack_serializer_update(struct trigger *trigger, void *event)
+{
+	(void)trigger;
+	(void)event;
+	call_serializer_update_options();
+	return 0;
+}
+
 static struct trigger on_alter_func_in_lua = {
 	RLIST_LINK_INITIALIZER, lbox_func_new_or_delete, NULL, NULL
 };
@@ -1076,6 +1138,12 @@ static const struct luaL_Reg boxlib_internal[] = {
 void
 box_lua_call_init(struct lua_State *L)
 {
+	call_serializer_update_options();
+	trigger_create(&call_serializer_no_error_ext.update_trigger,
+		       on_msgpack_serializer_update, NULL, NULL);
+	trigger_add(&luaL_msgpack_default->on_update,
+		    &call_serializer_no_error_ext.update_trigger);
+
 	luaL_register(L, "box.internal", boxlib_internal);
 	lua_pop(L, 1);
 	/*

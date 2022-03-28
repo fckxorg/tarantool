@@ -30,7 +30,6 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "uuid/tt_uuid.h"
 #include "trigger.h"
 #include <stdint.h>
 #define RB_COMPACT 1
@@ -38,6 +37,7 @@
 #include <small/rlist.h>
 #include "applier.h"
 #include "fiber_cond.h"
+#include "tt_uuid.h"
 #include "vclock/vclock.h"
 #include "latch.h"
 
@@ -98,6 +98,8 @@ struct gc_consumer;
 
 static const int REPLICATION_CONNECT_QUORUM_ALL = INT_MAX;
 
+enum { REPLICATION_THREADS_MAX = 1000 };
+
 /**
  * Network timeout. Determines how often master and slave exchange
  * heartbeat messages. Set by box.cfg.replication_timeout.
@@ -155,6 +157,9 @@ extern bool replication_skip_conflict;
  */
 extern bool replication_anon;
 
+/** How many threads to use for decoding incoming replication stream. */
+extern int replication_threads;
+
 /**
  * Wait for the given period of time before trying to reconnect
  * to a master.
@@ -176,7 +181,7 @@ replication_disconnect_timeout(void)
 }
 
 void
-replication_init(void);
+replication_init(int num_threads);
 
 void
 replication_free(void);
@@ -439,10 +444,12 @@ replicaset_add_anon(const struct tt_uuid *replica_uuid);
  * \param connect_quorum if this flag is set, fail unless at
  *                       least replication_connect_quorum
  *                       appliers have successfully connected.
+ * \param keep_connect   if this flag is set do not force a reconnect if the
+ *                       old connection to the replica is fine.
  */
 void
 replicaset_connect(struct applier **appliers, int count,
-		   bool connect_quorum);
+		   bool connect_quorum, bool keep_connect);
 
 /**
  * Check if the current instance fell too much behind its

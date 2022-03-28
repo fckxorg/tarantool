@@ -38,8 +38,10 @@
 #include "lua/fiber.h"
 #include "fiber.h"
 #include "coio.h"
+#include "iostream.h"
 #include "lua/msgpack.h"
 #include "lua-yaml/lyaml.h"
+#include "main.h"
 #include "serialize_lua.h"
 #include <lua.h>
 #include <lauxlib.h>
@@ -222,6 +224,28 @@ console_push_line(char *line)
 	 */
 	rl_callback_handler_install(NULL, NULL);
 #endif
+	free(line);
+}
+
+static bool sigint_called;
+/*
+ * The pointer to interactive fiber is needed to wake it up
+ * when SIGINT handler is called.
+ */
+static struct fiber *interactive_fb;
+
+/*
+ * The sigint callback for console mode.
+ */
+static void
+console_sigint_handler(ev_loop *loop, struct ev_signal *w, int revents)
+{
+	(void)loop;
+	(void)w;
+	(void)revents;
+
+	sigint_called = true;
+	fiber_wakeup(interactive_fb);
 }
 
 /* implements readline() Lua API */
@@ -231,6 +255,9 @@ lbox_console_readline(struct lua_State *L)
 	const char *prompt = NULL;
 	int top;
 	int completion = 0;
+	interactive_fb = fiber();
+	sigint_cb_t old_cb = set_sigint_cb(console_sigint_handler);
+	sigint_called = false;
 
 	if (lua_gettop(L) > 0) {
 		switch (lua_type(L, 1)) {
@@ -282,12 +309,35 @@ lbox_console_readline(struct lua_State *L)
 	while (top == lua_gettop(L)) {
 		while (coio_wait(STDIN_FILENO, COIO_READ,
 				 TIMEOUT_INFINITY) == 0) {
+			if (sigint_called) {
+				const char *line_end = "^C\n";
+				ssize_t rc = write(STDOUT_FILENO, line_end,
+						   strlen(line_end));
+				(void)rc;
+				/*
+				 * Discard current input and disable search
+				 * mode.
+				 */
+				RL_UNSETSTATE(RL_STATE_ISEARCH |
+					      RL_STATE_NSEARCH |
+					      RL_STATE_SEARCH);
+				rl_on_new_line();
+				rl_replace_line("", 0);
+				lua_pushstring(L, "");
+
+				readline_L = NULL;
+				sigint_called = false;
+				set_sigint_cb(old_cb);
+				return 1;
+			}
 			/*
 			 * Make sure the user of interactive
 			 * console has not hanged us, otherwise
 			 * we might spin here forever eating
 			 * the whole cpu time.
 			 */
+			if (fiber_is_cancelled())
+				set_sigint_cb(old_cb);
 			luaL_testcancel(L);
 		}
 		rl_callback_read_char();
@@ -297,6 +347,7 @@ lbox_console_readline(struct lua_State *L)
 	/* Incidents happen. */
 #pragma GCC poison readline_L
 	rl_attempted_completion_function = NULL;
+	set_sigint_cb(old_cb);
 	luaL_testcancel(L);
 	return 1;
 }
@@ -573,8 +624,11 @@ console_session_push(struct session *session, struct port *port)
 	const char *text = port_dump_plain(port, &text_len);
 	if (text == NULL)
 		return -1;
-	return coio_write_fd_timeout(session_fd(session), text, text_len,
-				     TIMEOUT_INFINITY);
+	struct iostream io;
+	plain_iostream_create(&io, session_fd(session));
+	int ret = coio_write_timeout(&io, text, text_len, TIMEOUT_INFINITY);
+	iostream_destroy(&io);
+	return ret >= 0 ? 0 : -1;
 }
 
 void
@@ -755,13 +809,32 @@ lua_rl_dmadd(dmlist *ml, const char *p, size_t pn, const char *s, int suf)
 	return 0;
 }
 
-/* Get __index field of metatable of object on top of stack. */
+/*
+ * Get table from __autocomplete function if it's present
+ * Use __index field of metatable of object as a fallback
+ */
 static int
-lua_rl_getmetaindex(lua_State *L)
+lua_rl_getcompletion(lua_State *L)
 {
 	if (!lua_getmetatable(L, -1)) {
 		lua_pop(L, 1);
 		return 0;
+	}
+	/* use __autocomplete metamethod if it's present */
+	lua_pushstring(L, "__autocomplete");
+	lua_rawget(L, -2);
+	if (lua_isfunction(L, -1)) {
+		lua_replace(L, -2);
+		lua_insert(L, -2);
+		if (lua_pcall(L, 1, 1, 0) != 0) {
+			/* pcall returns an error to the stack */
+			lua_pop(L, 1);
+			return 0;
+		} else {
+			return 1;
+		}
+	} else {
+		lua_pop(L, 1);
 	}
 	lua_pushstring(L, "__index");
 	lua_rawget(L, -2);
@@ -793,7 +866,7 @@ lua_rl_getfield(lua_State *L, const char *s, size_t n)
 			lua_pop(L, 1);
 			return 0;
 		}
-	} while (lua_rl_getmetaindex(L));
+	} while (lua_rl_getcompletion(L));
 	return 0;
 }	 /* 1: obj -- val, 0: obj -- */
 
@@ -899,7 +972,7 @@ lua_rl_complete(lua_State *L, const char *text, int start, int end)
 					goto error;
 			}
 		}
-	} while (++loop < METATABLE_RECURSION_MAX && lua_rl_getmetaindex(L));
+	} while (++loop < METATABLE_RECURSION_MAX && lua_rl_getcompletion(L));
 
 	lua_pop(L, 1);
 

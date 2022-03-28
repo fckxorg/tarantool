@@ -81,6 +81,8 @@
 #include "sql_stmt_cache.h"
 #include "msgpack.h"
 #include "raft.h"
+#include "watcher.h"
+#include "audit.h"
 #include "trivia/util.h"
 #include "version.h"
 
@@ -90,6 +92,8 @@ static char status[64] = "unknown";
 struct rmean *rmean_box;
 
 double on_shutdown_trigger_timeout = 3.0;
+
+double txn_timeout_default;
 
 struct rlist box_on_shutdown_trigger_list =
 	RLIST_HEAD_INITIALIZER(box_on_shutdown_trigger_list);
@@ -172,19 +176,84 @@ box_update_ro_summary(void)
 	fiber_cond_broadcast(&ro_cond);
 }
 
+const char *
+box_ro_reason(void)
+{
+	if (raft_is_ro(box_raft()))
+		return "election";
+	if (txn_limbo_is_ro(&txn_limbo))
+		return "synchro";
+	if (is_ro)
+		return "config";
+	if (is_orphan)
+		return "orphan";
+	return NULL;
+}
+
 static int
 box_check_writable(void)
 {
-	if (is_ro_summary) {
+	if (!is_ro_summary)
+		return 0;
+	struct error *e = diag_set(ClientError, ER_READONLY);
+	struct raft *raft = box_raft();
+	error_append_msg(e, " - ");
+	error_set_str(e, "reason", box_ro_reason());
+	/*
+	 * In case of multiple reasons at the same time only one is reported.
+	 * But the order is important. For example, if the instance has election
+	 * enabled, for the client it is better to see that it is a 'follower'
+	 * and who is the leader than just see cfg 'read_only' is true.
+	 */
+	if (raft_is_ro(raft)) {
+		const char *state = raft_state_str(raft->state);
+		uint64_t term = raft->volatile_term;
+		error_set_str(e, "state", state);
+		error_set_uint(e, "term", term);
+		error_append_msg(e, "state is election %s with term %llu",
+				 state, (unsigned long long)term);
+		uint32_t id = raft->leader;
+		if (id != REPLICA_ID_NIL) {
+			error_set_uint(e, "leader_id", id);
+			error_append_msg(e, ", leader is %u", id);
+			struct replica *r = replica_by_id(id);
+			/*
+			 * XXX: when the leader is dropped from _cluster, it
+			 * is not reported to Raft.
+			 */
+			if (r != NULL) {
+				error_set_uuid(e, "leader_uuid", &r->uuid);
+				error_append_msg(e, " (%s)",
+						 tt_uuid_str(&r->uuid));
+			}
+		}
+	} else if (txn_limbo_is_ro(&txn_limbo)) {
+		uint32_t id = txn_limbo.owner_id;
+		uint64_t term = txn_limbo.promote_greatest_term;
+		error_set_uint(e, "queue_owner_id", id);
+		error_set_uint(e, "term", term);
+		error_append_msg(e, "synchro queue with term %llu belongs "
+				 "to %u", (unsigned long long)term,
+				 (unsigned)id);
+		struct replica *r = replica_by_id(id);
 		/*
-		 * XXX: return a special error when the node is not a leader to
-		 * reroute to the leader node.
+		 * XXX: when an instance is deleted from _cluster, its limbo's
+		 * ownership is not cleared.
 		 */
-		diag_set(ClientError, ER_READONLY);
-		diag_log();
-		return -1;
+		if (r != NULL) {
+			error_set_uuid(e, "queue_owner_uuid", &r->uuid);
+			error_append_msg(e, " (%s)", tt_uuid_str(&r->uuid));
+		}
+	} else {
+		if (is_ro)
+			error_append_msg(e, "box.cfg.read_only is true");
+		else if (is_orphan)
+			error_append_msg(e, "it is an orphan");
+		else
+			assert(false);
 	}
-	return 0;
+	diag_log();
+	return -1;
 }
 
 static void
@@ -307,10 +376,10 @@ box_set_orphan(bool orphan)
 	box_do_set_orphan(orphan);
 	/* Update the title to reflect the new status. */
 	if (is_orphan) {
-		say_crit("entering orphan mode");
+		say_info("entering orphan mode");
 		title("orphan");
 	} else {
-		say_crit("leaving orphan mode");
+		say_info("leaving orphan mode");
 		title("running");
 	}
 }
@@ -662,22 +731,6 @@ box_check_say(void)
 	}
 }
 
-static int
-box_check_uri(const char *source, const char *option_name)
-{
-	if (source == NULL)
-		return 0;
-	struct uri uri;
-
-	/* URI format is [host:]service */
-	if (uri_parse(&uri, source) || !uri.service) {
-		diag_set(ClientError, ER_CFG, option_name,
-			 "expected host:service or /unix.socket");
-		return -1;
-	}
-	return 0;
-}
-
 static enum election_mode
 box_check_election_mode(void)
 {
@@ -713,15 +766,55 @@ box_check_election_timeout(void)
 	return d;
 }
 
-static void
+static int
+box_check_uri_set(const char *option_name)
+{
+	struct uri_set uri_set;
+	if (cfg_get_uri_set(option_name, &uri_set) != 0) {
+		diag_set(ClientError, ER_CFG, option_name,
+			 diag_last_error(diag_get())->errmsg);
+		return -1;
+	}
+	int rc = 0;
+	for (int i = 0; i < uri_set.uri_count; i++) {
+		const struct uri *uri = &uri_set.uris[i];
+		if (uri->service == NULL) {
+			char *uristr = tt_static_buf();
+			uri_format(uristr, TT_STATIC_BUF_LEN, uri, false);
+			diag_set(ClientError, ER_CFG, option_name,
+				 tt_sprintf("bad URI '%s': expected host:service "
+				 "or /unix.socket", uristr));
+			rc = -1;
+			break;
+		}
+	}
+	uri_set_destroy(&uri_set);
+	return rc;
+}
+
+static int
 box_check_replication(void)
 {
-	int count = cfg_getarr_size("replication");
-	for (int i = 0; i < count; i++) {
-		const char *source = cfg_getarr_elem("replication", i);
-		if (box_check_uri(source, "replication") != 0)
-			diag_raise();
+	return box_check_uri_set("replication");
+}
+
+static int
+box_check_replication_threads(void)
+{
+	int count = cfg_geti("replication_threads");
+	if (count <= 0 || count > REPLICATION_THREADS_MAX) {
+		diag_set(ClientError, ER_CFG, "replication_threads",
+			 tt_sprintf("must be greater than 0, less than or "
+				    "equal to %d", REPLICATION_THREADS_MAX));
+		return -1;
 	}
+	return 0;
+}
+
+static int
+box_check_listen(void)
+{
+	return box_check_uri_set("listen");
 }
 
 static double
@@ -1034,7 +1127,7 @@ box_check_memory_quota(const char *quota_name)
 		return size;
 	diag_set(ClientError, ER_CFG, quota_name,
 		 tt_sprintf("must be >= 0 and <= %zu, but it is %lld",
-		 QUOTA_MAX, size));
+			    QUOTA_MAX, (long long)size));
 	return -1;
 }
 
@@ -1141,12 +1234,24 @@ box_check_iproto_options(void)
 	return 0;
 }
 
+static double
+box_check_txn_timeout(void)
+{
+	double timeout = cfg_getd_default("txn_timeout", TIMEOUT_INFINITY);
+	if (timeout <= 0) {
+		diag_set(ClientError, ER_CFG, "txn_timeout",
+			 "the value must be greather than 0");
+		return -1;
+	}
+	return timeout;
+}
+
 void
 box_check_config(void)
 {
 	struct tt_uuid uuid;
 	box_check_say();
-	if (box_check_uri(cfg_gets("listen"), "listen") != 0)
+	if (box_check_listen() != 0)
 		diag_raise();
 	box_check_instance_uuid(&uuid);
 	box_check_replicaset_uuid(&uuid);
@@ -1154,7 +1259,8 @@ box_check_config(void)
 		diag_raise();
 	if (box_check_election_timeout() < 0)
 		diag_raise();
-	box_check_replication();
+	if (box_check_replication() != 0)
+		diag_raise();
 	box_check_replication_timeout();
 	box_check_replication_connect_timeout();
 	box_check_replication_connect_quorum();
@@ -1162,6 +1268,8 @@ box_check_config(void)
 	if (box_check_replication_synchro_quorum() != 0)
 		diag_raise();
 	if (box_check_replication_synchro_timeout() < 0)
+		diag_raise();
+	if (box_check_replication_threads() < 0)
 		diag_raise();
 	box_check_replication_sync_timeout();
 	box_check_readahead(cfg_geti("readahead"));
@@ -1182,6 +1290,8 @@ box_check_config(void)
 	if (box_check_iproto_options() != 0)
 		diag_raise();
 	if (box_check_sql_cache_size(cfg_geti("sql_cache_size")) != 0)
+		diag_raise();
+	if (box_check_txn_timeout() < 0)
 		diag_raise();
 }
 
@@ -1208,58 +1318,50 @@ box_set_election_timeout(void)
 }
 
 /*
- * Parse box.cfg.replication and create appliers.
- */
-static struct applier **
-cfg_get_replication(int *p_count)
-{
-
-	/* Use static buffer for result */
-	static struct applier *appliers[VCLOCK_MAX];
-
-	int count = cfg_getarr_size("replication");
-	if (count >= VCLOCK_MAX) {
-		tnt_raise(ClientError, ER_CFG, "replication",
-				"too many replicas");
-	}
-
-	for (int i = 0; i < count; i++) {
-		const char *source = cfg_getarr_elem("replication", i);
-		struct applier *applier = applier_new(source);
-		if (applier == NULL) {
-			/* Delete created appliers */
-			while (--i >= 0)
-				applier_delete(appliers[i]);
-			return NULL;
-		}
-		appliers[i] = applier; /* link to the list */
-	}
-
-	*p_count = count;
-
-	return appliers;
-}
-
-/*
  * Sync box.cfg.replication with the cluster registry, but
  * don't start appliers.
  */
 static void
-box_sync_replication(bool connect_quorum)
+box_sync_replication(bool do_quorum, bool do_reuse)
 {
+	struct uri_set uri_set;
+	int rc = cfg_get_uri_set("replication", &uri_set);
+	assert(rc == 0);
+	(void)rc;
+	auto uri_set_guard = make_scoped_guard([&]{
+		uri_set_destroy(&uri_set);
+	});
+	if (uri_set.uri_count >= VCLOCK_MAX) {
+		tnt_raise(ClientError, ER_CFG, "replication",
+			  "too many replicas");
+	}
 	int count = 0;
-	struct applier **appliers = cfg_get_replication(&count);
-	if (appliers == NULL)
-		diag_raise();
-
-	auto guard = make_scoped_guard([=]{
+	struct applier *appliers[VCLOCK_MAX] = {};
+	auto appliers_guard = make_scoped_guard([=]{
 		for (int i = 0; i < count; i++)
 			applier_delete(appliers[i]); /* doesn't affect diag */
 	});
+	for (; count < uri_set.uri_count; count++) {
+		appliers[count] = applier_new(&uri_set.uris[count]);
+	}
+	replicaset_connect(appliers, count, do_quorum, do_reuse);
+	appliers_guard.is_active = false;
+}
 
-	replicaset_connect(appliers, count, connect_quorum);
+static inline void
+box_restart_replication(void)
+{
+	const bool do_quorum = true;
+	const bool do_reuse = false;
+	box_sync_replication(do_quorum, do_reuse);
+}
 
-	guard.is_active = false;
+static inline void
+box_update_replication(void)
+{
+	const bool do_quorum = false;
+	const bool do_reuse = true;
+	box_sync_replication(do_quorum, do_reuse);
 }
 
 void
@@ -1274,13 +1376,14 @@ box_set_replication(void)
 		return;
 	}
 
-	box_check_replication();
+	if (box_check_replication() != 0)
+		diag_raise();
 	/*
 	 * Try to connect to all replicas within the timeout period.
 	 * Stay in orphan mode in case we fail to connect to at least
 	 * 'replication_connect_quorum' remote instances.
 	 */
-	box_sync_replication(false);
+	box_update_replication();
 	/* Follow replica */
 	replicaset_follow();
 	/* Wait until appliers are in sync */
@@ -1400,7 +1503,7 @@ box_set_replication_anon(void)
 		 * them can register and others resend a
 		 * non-anonymous subscribe.
 		 */
-		box_sync_replication(false);
+		box_restart_replication();
 		/*
 		 * Wait until the master has registered this
 		 * instance.
@@ -1677,6 +1780,7 @@ box_issue_promote(uint32_t prev_leader_id, int64_t promote_lsn)
 	struct raft *raft = box_raft();
 	assert(raft->volatile_term == raft->term);
 	assert(promote_lsn >= 0);
+	txn_limbo_begin(&txn_limbo);
 	txn_limbo_write_promote(&txn_limbo, promote_lsn,
 				raft->term);
 	struct synchro_request req = {
@@ -1686,7 +1790,8 @@ box_issue_promote(uint32_t prev_leader_id, int64_t promote_lsn)
 		.lsn = promote_lsn,
 		.term = raft->term,
 	};
-	txn_limbo_process(&txn_limbo, &req);
+	txn_limbo_apply(&txn_limbo, &req);
+	txn_limbo_commit(&txn_limbo);
 	assert(txn_limbo_is_empty(&txn_limbo));
 }
 
@@ -1699,6 +1804,7 @@ box_issue_demote(uint32_t prev_leader_id, int64_t promote_lsn)
 {
 	assert(box_raft()->volatile_term == box_raft()->term);
 	assert(promote_lsn >= 0);
+	txn_limbo_begin(&txn_limbo);
 	txn_limbo_write_demote(&txn_limbo, promote_lsn,
 				box_raft()->term);
 	struct synchro_request req = {
@@ -1708,7 +1814,8 @@ box_issue_demote(uint32_t prev_leader_id, int64_t promote_lsn)
 		.lsn = promote_lsn,
 		.term = box_raft()->term,
 	};
-	txn_limbo_process(&txn_limbo, &req);
+	txn_limbo_apply(&txn_limbo, &req);
+	txn_limbo_commit(&txn_limbo);
 	assert(txn_limbo_is_empty(&txn_limbo));
 }
 
@@ -1833,10 +1940,14 @@ box_demote(void)
 int
 box_listen(void)
 {
-	const char *uri = cfg_gets("listen");
-	if (box_check_uri(uri, "listen") != 0 || iproto_listen(uri) != 0)
+	if (box_check_listen() != 0)
 		return -1;
-	return 0;
+	struct uri_set uri_set;
+	int rc = cfg_get_uri_set("listen", &uri_set);
+	assert(rc == 0);
+	rc = iproto_listen(&uri_set);
+	uri_set_destroy(&uri_set);
+	return rc;
 }
 
 void
@@ -2033,6 +2144,16 @@ box_set_crash(void)
 	}
 
 	crash_cfg(host, is_enabled_1 && is_enabled_2);
+	return 0;
+}
+
+int
+box_set_txn_timeout(void)
+{
+	double timeout = box_check_txn_timeout();
+	if (timeout < 0)
+		return -1;
+	txn_timeout_default = timeout;
 	return 0;
 }
 
@@ -2570,7 +2691,8 @@ box_process_auth(struct auth_request *request, const char *salt)
 }
 
 void
-box_process_fetch_snapshot(struct ev_io *io, struct xrow_header *header)
+box_process_fetch_snapshot(struct iostream *io,
+			   const struct xrow_header *header)
 {
 	assert(header->type == IPROTO_FETCH_SNAPSHOT);
 
@@ -2591,7 +2713,7 @@ box_process_fetch_snapshot(struct ev_io *io, struct xrow_header *header)
 
 	/* Send the snapshot data to the instance. */
 	struct vclock start_vclock;
-	relay_initial_join(io->fd, header->sync, &start_vclock, 0);
+	relay_initial_join(io, header->sync, &start_vclock, 0);
 	say_info("read-view sent.");
 
 	/* Remember master's vclock after the last request */
@@ -2606,7 +2728,7 @@ box_process_fetch_snapshot(struct ev_io *io, struct xrow_header *header)
 }
 
 void
-box_process_register(struct ev_io *io, struct xrow_header *header)
+box_process_register(struct iostream *io, const struct xrow_header *header)
 {
 	assert(header->type == IPROTO_REGISTER);
 
@@ -2668,7 +2790,7 @@ box_process_register(struct ev_io *io, struct xrow_header *header)
 	 * (replica_vclock, stop_vclock) so that it gets its
 	 * registration.
 	 */
-	relay_final_join(io->fd, header->sync, &replica_vclock, &stop_vclock);
+	relay_final_join(io, header->sync, &replica_vclock, &stop_vclock);
 	say_info("final data sent.");
 
 	struct xrow_header row;
@@ -2691,7 +2813,7 @@ box_process_register(struct ev_io *io, struct xrow_header *header)
 }
 
 void
-box_process_join(struct ev_io *io, struct xrow_header *header)
+box_process_join(struct iostream *io, const struct xrow_header *header)
 {
 	/*
 	 * Tarantool 1.7 JOIN protocol diagram (gh-1113)
@@ -2789,7 +2911,7 @@ box_process_join(struct ev_io *io, struct xrow_header *header)
 	 * Initial stream: feed replica with dirty data from engines.
 	 */
 	struct vclock start_vclock;
-	relay_initial_join(io->fd, header->sync, &start_vclock,
+	relay_initial_join(io, header->sync, &start_vclock,
 			   replica_version_id);
 	say_info("initial data sent.");
 
@@ -2816,7 +2938,7 @@ box_process_join(struct ev_io *io, struct xrow_header *header)
 	 * Final stage: feed replica with WALs in range
 	 * (start_vclock, stop_vclock).
 	 */
-	relay_final_join(io->fd, header->sync, &start_vclock, &stop_vclock);
+	relay_final_join(io, header->sync, &start_vclock, &stop_vclock);
 	say_info("final data sent.");
 
 	/* Send end of WAL stream marker */
@@ -2837,7 +2959,7 @@ box_process_join(struct ev_io *io, struct xrow_header *header)
 }
 
 void
-box_process_subscribe(struct ev_io *io, struct xrow_header *header)
+box_process_subscribe(struct iostream *io, const struct xrow_header *header)
 {
 	assert(header->type == IPROTO_SUBSCRIBE);
 
@@ -2994,7 +3116,7 @@ box_process_subscribe(struct ev_io *io, struct xrow_header *header)
 	 * a stall in updates (in this case replica may hang
 	 * indefinitely).
 	 */
-	relay_subscribe(replica, io->fd, header->sync, &replica_clock,
+	relay_subscribe(replica, io, header->sync, &replica_clock,
 			replica_version_id, id_filter);
 }
 
@@ -3044,6 +3166,7 @@ box_free(void)
 		tuple_free();
 		port_free();
 #endif
+		box_watcher_free();
 		box_raft_free();
 		iproto_free();
 		replication_free();
@@ -3051,6 +3174,7 @@ box_free(void)
 		gc_free();
 		engine_shutdown();
 		wal_free();
+		audit_log_free();
 		sql_built_in_functions_cache_free();
 	}
 }
@@ -3253,7 +3377,7 @@ bootstrap(const struct tt_uuid *instance_uuid,
 	 * with connecting to 'replication_connect_quorum' masters.
 	 * If this also fails, throw an error.
 	 */
-	box_sync_replication(true);
+	box_restart_replication();
 
 	struct replica *master = replicaset_find_join_master();
 	assert(master == NULL || master->applier != NULL);
@@ -3330,7 +3454,7 @@ local_recovery(const struct tt_uuid *instance_uuid,
 	if (wal_dir_lock >= 0) {
 		if (box_listen() != 0)
 			diag_raise();
-		box_sync_replication(false);
+		box_update_replication();
 
 		struct replica *master;
 		if (replicaset_needs_rejoin(&master)) {
@@ -3375,7 +3499,6 @@ local_recovery(const struct tt_uuid *instance_uuid,
 			diag_raise();
 		diag_log();
 	}
-	engine_end_recovery_xc();
 	/*
 	 * Leave hot standby mode, if any, only after
 	 * acquiring the lock.
@@ -3383,6 +3506,7 @@ local_recovery(const struct tt_uuid *instance_uuid,
 	if (wal_dir_lock < 0) {
 		title("hot_standby");
 		say_info("Entering hot standby mode");
+		engine_begin_hot_standby_xc();
 		recovery_follow_local(recovery, &wal_stream.base, "hot_standby",
 				      cfg_getd("wal_dir_rescan_delay"));
 		while (true) {
@@ -3409,7 +3533,42 @@ local_recovery(const struct tt_uuid *instance_uuid,
 		vclock_copy(&replicaset.vclock, &recovery->vclock);
 		if (box_listen() != 0)
 			diag_raise();
-		box_sync_replication(false);
+		box_update_replication();
+	} else if (vclock_compare(&replicaset.vclock, &recovery->vclock) != 0) {
+		/*
+		 * There are several reasons for a node to recover a vclock not
+		 * matching the one scanned initially:
+		 *
+		 * 1) someone else might append the files we are reading.
+		 *    This shouldn't typically happen with Tarantool >= 1.7.x,
+		 *    because it takes a lock on WAL directory.
+		 *    But it's still possible in some crazy set up, for example
+		 *    one could recover from another instance's symlinked xlogs.
+		 *
+		 * 2) Non-matching (by signature) snaps and xlogs, i.e.:
+		 *    a) snaps from a remote instance together with local
+		 *       istance's xlogs.
+		 *    b) snaps/xlogs from Tarantool 1.6.
+		 *
+		 * The second case could be distinguished from the first one,
+		 * but this would require unnecessarily re-reading an xlog
+		 * preceding the latest snap, just to make sure the WAL doesn't
+		 * span over the snap creation signature.
+		 *
+		 * Allow both cases, if the user has set force_recovery.
+		 */
+		const char *mismatch_str =
+			tt_sprintf("Replicaset vclock %s doesn't match "
+				   "recovered data %s",
+				   vclock_to_string(&replicaset.vclock),
+				   vclock_to_string(&recovery->vclock));
+		if (is_force_recovery) {
+			say_warn("%s: ignoring, because 'force_recovery' "
+				 "configuration option is set.", mismatch_str);
+			vclock_copy(&replicaset.vclock, &recovery->vclock);
+		} else {
+			panic("Can't proceed. %s.", mismatch_str);
+		}
 	}
 	stream_guard.is_active = false;
 	recovery_finalize(recovery);
@@ -3422,6 +3581,8 @@ local_recovery(const struct tt_uuid *instance_uuid,
 	 */
 	if (wal_enable() != 0)
 		diag_raise();
+
+	engine_end_recovery_xc();
 
 	/* Check replica set UUID. */
 	if (!tt_uuid_is_nil(replicaset_uuid) &&
@@ -3467,9 +3628,7 @@ box_init(void)
 	 * as a default session user when running triggers.
 	 */
 	session_init();
-
-	if (schema_module_init() != 0)
-		diag_raise();
+	schema_module_init();
 
 	if (tuple_init(lua_hash) != 0)
 		diag_raise();
@@ -3477,6 +3636,7 @@ box_init(void)
 	txn_limbo_init();
 	sequence_init();
 	box_raft_init();
+	box_watcher_init();
 }
 
 bool
@@ -3501,7 +3661,7 @@ box_cfg_xc(void)
 	gc_init();
 	engine_init();
 	schema_init();
-	replication_init();
+	replication_init(cfg_geti_default("replication_threads", 1));
 	port_init();
 	iproto_init(cfg_geti("iproto_threads"));
 	sql_init();
@@ -3613,6 +3773,8 @@ box_cfg_xc(void)
 
 	/* Follow replica */
 	replicaset_follow();
+
+	audit_log_init(cfg_gets("audit_log"), cfg_geti("audit_nonblock"));
 
 	fiber_gc();
 	is_box_configured = true;

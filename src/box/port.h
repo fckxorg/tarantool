@@ -119,11 +119,18 @@ struct port_c_entry {
 		char *mp;
 	};
 	uint32_t mp_size;
+	/**
+	 * Optional format of MsgPack data (that must be MP_ARR in that case).
+	 * Is NULL if format is not specified.
+	 */
+	struct tuple_format *mp_format;
 };
 
 /**
  * C port is used by C functions from the public API. They can
  * return tuples and arbitrary MessagePack.
+ * Warning: this structure is exposed in FFI, so any change in it must be
+ * replicated if FFI cdef, see schema.lua.
  */
 struct port_c {
 	const struct port_vtab *vtab;
@@ -147,6 +154,20 @@ port_c_add_tuple(struct port *port, struct tuple *tuple);
 /** Append raw MessagePack to the port. It is copied. */
 int
 port_c_add_mp(struct port *port, const char *mp, const char *mp_end);
+
+struct tuple_format;
+
+/**
+ * Append raw msgpack array to the port with given format.
+ * Msgpack is copied, the format is referenced for port's lifetime.
+ */
+int
+port_c_add_formatted_mp(struct port *port, const char *mp, const char *mp_end,
+			struct tuple_format *format);
+
+/** Append a string to the port. The string is copied as msgpack string. */
+int
+port_c_add_str(struct port *port, const char *str, uint32_t len);
 
 void
 port_init(void);

@@ -13,14 +13,14 @@ set(core_sources
     latch.c
     sio.c
     evio.c
-    coio.cc
+    coio.c
     coio_task.c
     coio_file.c
     popen.c
-    coio_buf.cc
     fio.c
     exception.cc
     errinj.c
+    error_payload.c
     reflection.c
     assoc.c
     util.c
@@ -30,7 +30,27 @@ set(core_sources
     decimal.c
     mp_decimal.c
     cord_buf.c
+    datetime.c
+    iostream.c
+    tt_uuid.c
+    mp_uuid.c
+    mp_datetime.c
 )
+
+if(ENABLE_TUPLE_COMPRESSION)
+    list(APPEND core_sources ${TUPLE_COMPRESSION_CORE_SOURCES})
+else()
+    list(APPEND core_sources  tt_compression.c)
+endif()
+
+if(ENABLE_SSL)
+    list(APPEND core_sources ${SSL_SOURCES})
+else()
+    list(APPEND core_sources ssl.c ssl_error.cc)
+endif()
+
+include_directories(${OPENSSL_INCLUDE_DIR}
+                    ${EXTRA_CORE_INCLUDE_DIRS})
 
 if (TARGET_OS_NETBSD)
     # A workaround for "undefined reference to `__gcc_personality_v0'"
@@ -41,12 +61,22 @@ endif()
 
 add_library(core STATIC ${core_sources})
 
-target_link_libraries(core salad small uri decNumber bit ${LIBEV_LIBRARIES}
+target_link_libraries(core salad small uri decNumber bit tzcode
+                      ${LIBEV_LIBRARIES}
                       ${LIBEIO_LIBRARIES} ${LIBCORO_LIBRARIES}
-                      ${MSGPUCK_LIBRARIES} ${ICU_LIBRARIES})
+                      ${MSGPUCK_LIBRARIES} ${ICU_LIBRARIES}
+                      ${LIBCDT_LIBRARIES} ${OPENSSL_LIBRARIES}
+                      ${EXTRA_CORE_LINK_LIBRARIES})
 
-if (ENABLE_BACKTRACE AND NOT TARGET_OS_DARWIN)
-    target_link_libraries(core gcc_s ${UNWIND_LIBRARIES})
+if (ENABLE_BACKTRACE)
+    target_link_libraries(core ${LIBUNWIND_LIBRARIES})
+    if(ENABLE_BUNDLED_LIBUNWIND)
+        add_dependencies(core bundled-libunwind bundled-libunwind-platform)
+    endif()
+endif()
+
+if (ENABLE_TUPLE_COMPRESSION)
+    target_link_libraries(core ${ZSTD_LIBRARIES})
 endif()
 
 # Since fiber.top() introduction, fiber.cc, which is part of core

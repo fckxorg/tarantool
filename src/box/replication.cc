@@ -56,6 +56,7 @@ double replication_synchro_timeout = 5.0; /* seconds */
 double replication_sync_timeout = 300.0; /* seconds */
 bool replication_skip_conflict = false;
 bool replication_anon = false;
+int replication_threads = 1;
 
 struct replicaset replicaset;
 
@@ -84,7 +85,7 @@ replicaset_quorum(void)
 }
 
 void
-replication_init(void)
+replication_init(int num_threads)
 {
 	memset(&replicaset, 0, sizeof(replicaset));
 	replica_hash_new(&replicaset.hash);
@@ -101,6 +102,10 @@ replication_init(void)
 	rlist_create(&replicaset.on_ack);
 
 	diag_create(&replicaset.applier.diag);
+
+	replication_threads = num_threads;
+
+	applier_init();
 }
 
 void
@@ -116,6 +121,8 @@ replication_free(void)
 
 	diag_destroy(&replicaset.applier.diag);
 	trigger_destroy(&replicaset.on_ack);
+
+	applier_free();
 }
 
 int
@@ -355,8 +362,9 @@ replica_on_applier_connect(struct replica *replica)
 	if (orig != NULL && orig->applier != NULL) {
 		say_error("duplicate connection to the same replica: "
 			  "instance uuid %s, addr1 %s, addr2 %s",
-			  tt_uuid_str(&orig->uuid), applier->source,
-			  orig->applier->source);
+			  tt_uuid_str(&orig->uuid),
+			  applier_uri_str(applier),
+			  applier_uri_str(orig->applier));
 		fiber_cancel(fiber());
 		/*
 		 * Raise an exception to force the applier
@@ -507,7 +515,7 @@ replica_on_applier_state_f(struct trigger *trigger, void *event)
  * upon reconfiguration of box.cfg.replication.
  */
 static void
-replicaset_update(struct applier **appliers, int count)
+replicaset_update(struct applier **appliers, int count, bool keep_connect)
 {
 	replica_hash_t uniq;
 	memset(&uniq, 0, sizeof(uniq));
@@ -572,22 +580,39 @@ replicaset_update(struct applier **appliers, int count)
 		applier_stop(applier);
 		applier_delete(applier);
 	}
-	replicaset_foreach(replica) {
-		if (replica->applier == NULL)
-			continue;
-		applier = replica->applier;
-		replica_clear_applier(replica);
-		replica->applier_sync_state = APPLIER_DISCONNECTED;
-		applier_stop(applier);
-		applier_delete(applier);
-	}
 
-	/* Save new appliers */
 	replicaset.applier.total = count;
 	replicaset.applier.connected = 0;
 	replicaset.applier.loading = 0;
 	replicaset.applier.synced = 0;
+	replicaset_foreach(replica) {
+		if (replica->applier == NULL)
+			continue;
+		struct replica *other = replica_hash_search(&uniq, replica);
+		if (keep_connect && other != NULL &&
+		    (replica->applier->state == APPLIER_FOLLOW ||
+		     replica->applier->state == APPLIER_SYNC)) {
+			/*
+			 * Try not to interrupt working appliers upon
+			 * reconfiguration.
+			 */
+			replicaset.applier.connected++;
+			replicaset.applier.synced++;
+			replica_hash_remove(&uniq, other);
+			applier = other->applier;
+			replica_clear_applier(other);
+			replica_delete(other);
+		} else {
+			applier = replica->applier;
+			replica_clear_applier(replica);
+			replica->applier_sync_state = APPLIER_DISCONNECTED;
+		}
+		applier_stop(applier);
+		applier_delete(applier);
+	}
 
+
+	/* Save new appliers */
 	replica_hash_foreach_safe(&uniq, replica, next) {
 		replica_hash_remove(&uniq, replica);
 
@@ -664,11 +689,11 @@ applier_on_connect_f(struct trigger *trigger, void *event)
 
 void
 replicaset_connect(struct applier **appliers, int count,
-		   bool connect_quorum)
+		   bool connect_quorum, bool keep_connect)
 {
 	if (count == 0) {
 		/* Cleanup the replica set. */
-		replicaset_update(appliers, count);
+		replicaset_update(appliers, 0, false);
 		return;
 	}
 
@@ -772,7 +797,7 @@ replicaset_connect(struct applier **appliers, int count,
 
 	/* Now all the appliers are connected, update the replica set. */
 	try {
-		replicaset_update(appliers, count);
+		replicaset_update(appliers, count, keep_connect);
 	} catch (Exception *e) {
 		goto error;
 	}

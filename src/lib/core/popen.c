@@ -14,7 +14,9 @@
 #include "fiber.h"
 #include "assoc.h"
 #include "coio.h"
+#include "iostream.h"
 #include "say.h"
+#include "tarantool_ev.h"
 
 #ifdef TARGET_OS_DARWIN
 # include <sys/ioctl.h>
@@ -222,12 +224,8 @@ handle_new(struct popen_opts *opts)
 
 	rlist_create(&handle->list);
 
-	/*
-	 * No need to initialize the whole ios structure,
-	 * just set fd value to mark as unused.
-	 */
 	for (i = 0; i < lengthof(handle->ios); i++)
-		handle->ios[i].fd = -1;
+		iostream_clear(&handle->ios[i]);
 
 	say_debug("popen: alloc handle %p command '%s' flags %#x",
 		  handle, handle->command, opts->flags);
@@ -275,7 +273,7 @@ popen_may_io(struct popen_handle *handle, unsigned int idx,
 	if (!(io_flags & handle->flags))
 		return popen_set_unsupported_io_error();
 
-	if (handle->ios[idx].fd < 0) {
+	if (!iostream_is_initialized(&handle->ios[idx])) {
 		diag_set(IllegalParams, "popen: attempt to operate "
 			 "on a closed file descriptor");
 		return -1;
@@ -397,8 +395,7 @@ popen_write_timeout(struct popen_handle *handle, const void *buf,
 		  handle->pid, stdX_str(idx), idx, buf, count,
 		  handle->ios[idx].fd, timeout);
 
-	ssize_t rc = coio_write_timeout_noxc(&handle->ios[idx], buf,
-					     count, timeout);
+	ssize_t rc = coio_write_timeout(&handle->ios[idx], buf, count, timeout);
 	assert(rc < 0 || rc == (ssize_t)count);
 	return rc;
 }
@@ -462,8 +459,8 @@ popen_read_timeout(struct popen_handle *handle, void *buf,
 		  handle->pid, stdX_str(idx), idx, buf, count,
 		  handle->ios[idx].fd, timeout);
 
-	return coio_read_ahead_timeout_noxc(&handle->ios[idx], buf, 1, count,
-					    timeout);
+	return coio_read_ahead_timeout(&handle->ios[idx], buf, 1, count,
+				       timeout);
 }
 
 /**
@@ -530,13 +527,13 @@ popen_shutdown(struct popen_handle *handle, unsigned int flags)
 			continue;
 
 		/* Skip already closed fds. */
-		if (handle->ios[idx].fd < 0)
+		if (!iostream_is_initialized(&handle->ios[idx]))
 			continue;
 
 		say_debug("popen: %d: shutdown idx [%s:%zd] fd %d",
 			  handle->pid, stdX_str(idx), idx,
 			  handle->ios[idx].fd);
-		coio_close_io(loop(), &handle->ios[idx]);
+		iostream_close(&handle->ios[idx]);
 	}
 
 	return 0;
@@ -824,8 +821,8 @@ popen_delete(struct popen_handle *handle)
 	}
 
 	for (i = 0; i < lengthof(handle->ios); i++) {
-		if (handle->ios[i].fd != -1)
-			coio_close_io(loop(), &handle->ios[i]);
+		if (iostream_is_initialized(&handle->ios[i]))
+			iostream_close(&handle->ios[i]);
 	}
 
 	/*
@@ -1181,7 +1178,15 @@ popen_new(struct popen_opts *opts)
 	 * vfork to complete. Also we try to do as minimum
 	 * operations before the exec() as possible.
 	 */
+#pragma GCC diagnostic push
+	/*
+	 * TODO(gh-6674): we need to review popen's design and refactor this
+	 * part, completely getting rid of vfork, or change vfork to
+	 * posix_spawn here, but only on macOS.
+	 */
+#pragma GCC diagnostic warning "-Wdeprecated-declarations"
 	handle->pid = vfork();
+#pragma GCC diagnostic pop
 	if (handle->pid < 0) {
 		diag_set(SystemError, "vfork() fails");
 		goto out_err;
@@ -1341,7 +1346,8 @@ exit_child:
 			int child_idx = pfd_map[i].child_idx;
 			int parent_fd = pfd[i][parent_idx];
 
-			coio_create(&handle->ios[i], parent_fd);
+			assert(!iostream_is_initialized(&handle->ios[i]));
+			plain_iostream_create(&handle->ios[i], parent_fd);
 			if (fcntl(parent_fd, F_SETFL, O_NONBLOCK)) {
 				diag_set(SystemError, "Can't set O_NONBLOCK [%s:%d]",
 					 stdX_str(i), parent_fd);

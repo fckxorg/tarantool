@@ -44,7 +44,6 @@ extern "C" {
 struct luaL_field;
 struct luaL_serializer;
 struct mpstream;
-struct serializer_opts;
 
 /**
  * Default instance of msgpack serializer (msgpack = require('msgpack')).
@@ -62,16 +61,29 @@ luamp_error(void *);
 
 enum { LUAMP_ALLOC_FACTOR = 256 };
 
+/**
+ * Pushes to the Lua stack a new msgpack object and stores the given msgpack
+ * data in it. The new object uses the default serializer for decoding.
+ */
+void
+luamp_push(struct lua_State *L, const char *data, const char *data_end);
+
+/**
+ * Returns a pointer to the msgpack data and writes the length of the data to
+ * data_len if the object at the given index is a msgpack object. Otherwise
+ * returns NULL.
+ */
+const char *
+luamp_get(struct lua_State *L, int idx, size_t *data_len);
+
 /* low-level function needed for execute_lua_call() */
 enum mp_type
 luamp_encode_r(struct lua_State *L, struct luaL_serializer *cfg,
-	       const struct serializer_opts *opts, struct mpstream *stream,
-	       struct luaL_field *field, int level);
+	       struct mpstream *stream, struct luaL_field *field, int level);
 
 enum mp_type
 luamp_encode(struct lua_State *L, struct luaL_serializer *cfg,
-	     const struct serializer_opts *opts, struct mpstream *stream,
-	     int index);
+	     struct mpstream *stream, int index);
 
 void
 luamp_decode(struct lua_State *L, struct luaL_serializer *cfg,

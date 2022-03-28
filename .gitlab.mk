@@ -81,35 +81,6 @@ perf_cleanup_image:
 # Remove temporary performance image from the test host
 perf_cleanup: perf_clone_benchs_repo perf_cleanup_image
 
-# #################################
-# Run tests under a virtual machine
-# #################################
-
-# Transform the ${PRESERVE_ENVVARS} comma separated variables list
-# to the 'key="value" key="value" <...>' string.
-#
-# Add PRESERVE_ENVVARS itself to the list to allow to use this
-# make script again from the inner environment (if there will be
-# a need).
-comma := ,
-ENVVARS := PRESERVE_ENVVARS $(subst $(comma), ,$(PRESERVE_ENVVARS))
-PRESERVE_ENV := $(foreach var,$(ENVVARS),$(var)="$($(var))")
-
-vms_start:
-	VBoxManage controlvm ${VMS_NAME} poweroff || true
-	VBoxManage snapshot ${VMS_NAME} restore ${VMS_NAME}
-	VBoxManage startvm ${VMS_NAME} --type headless
-
-vms_test_%:
-	tar czf - ../tarantool | ssh ${VMS_USER}@127.0.0.1 -p ${VMS_PORT} tar xzf -
-	ssh ${VMS_USER}@127.0.0.1 -p ${VMS_PORT} "/bin/bash -c \
-		'cd tarantool && ${PRESERVE_ENV} ${TRAVIS_MAKE} $(subst vms_,,$@)'" || \
-		( scp -r -P ${VMS_PORT} ${VMS_USER}@127.0.0.1:tarantool/test/var/artifacts . \
-		; exit 1 )
-
-vms_shutdown:
-	VBoxManage controlvm ${VMS_NAME} poweroff
-
 # ######
 # Deploy
 # ######
@@ -117,8 +88,20 @@ vms_shutdown:
 GIT_DESCRIBE=$(shell git describe HEAD)
 GIT_TAG=$(shell git tag --points-at HEAD)
 MAJOR_VERSION=$(word 1,$(subst ., ,$(GIT_DESCRIBE)))
-BUCKET="series-$(MAJOR_VERSION)"
-S3_BUCKET_URL="s3://tarantool_repo/sources"
+MINOR_VERSION=$(word 2,$(subst ., ,$(GIT_DESCRIBE)))
+VERSION=$(MAJOR_VERSION).$(MINOR_VERSION)
+
+ifeq ($(VERSION), $(filter $(VERSION), 1.10 2.8))
+TARANTOOL_SERIES=$(MAJOR_VERSION).$(MINOR_VERSION)
+S3_SOURCE_REPO_URL=s3://tarantool_repo/sources/$(TARANTOOL_SERIES)
+else
+TARANTOOL_SERIES=series-$(MAJOR_VERSION)
+S3_SOURCE_REPO_URL=s3://tarantool_repo/sources
+endif
+
+RWS_BASE_URL=https://rws.tarantool.org
+RWS_ENDPOINT=${RWS_BASE_URL}/${REPO_TYPE}/${TARANTOOL_SERIES}/${OS}/${DIST}
+PRODUCT_NAME=tarantool
 
 deploy_prepare:
 	rm -rf packpack
@@ -133,23 +116,30 @@ package: deploy_prepare
 		export VERSION="$$(echo $(GIT_DESCRIBE) | sed 's/-\([0-9]\+\)-g[0-9a-f]\+$$/.\1/' | sed 's/-/~/').dev"; \
 	fi;                                                                                                             \
 	echo VERSION=$$VERSION;                                                                                         \
-	PACKPACK_EXTRA_DOCKER_RUN_PARAMS="--network=host ${PACKPACK_EXTRA_DOCKER_RUN_PARAMS}" ./packpack/packpack
-
-# found that libcreaterepo_c.so installed in local lib path
-deploy: export LD_LIBRARY_PATH=/usr/local/lib
+	PACKPACK_EXTRA_DOCKER_RUN_PARAMS="--network=host ${PACKPACK_EXTRA_DOCKER_RUN_PARAMS}"                           \
+	TARBALL_EXTRA_ARGS="--exclude=*.exe --exclude=*.dll"                                                            \
+	PRESERVE_ENVVARS="TARBALL_EXTRA_ARGS,${PRESERVE_ENVVARS}" ./packpack/packpack
 
 deploy:
-	echo ${GPG_SECRET_KEY} | base64 -d | gpg --batch --import || true
-	case "${GITHUB_REF}" in                                       \
-	refs/tags/*-alpha*|refs/tags/*-beta*|refs/tags/*-rc*) \
-	    ./tools/update_repo.sh -o=${OS} -d=${DIST}            \
-			-b="${PRERELEASE_REPO_S3_DIR}/${BUCKET}" build ; \
-	        ;;                                                    \
-	refs/tags/*)                                                  \
-		./tools/update_repo.sh -o=${OS} -d=${DIST}            \
-			-b="${RELEASE_REPO_S3_DIR}/${BUCKET}" build ; \
-	        ;;                                                    \
-	esac
+	if [ -z "${REPO_TYPE}" ]; then \
+		echo "Env variable 'REPO_TYPE' must be defined!"; \
+		exit 1; \
+	fi; \
+	CURL_CMD="curl \
+		--location \
+		--fail \
+		--silent \
+		--show-error \
+		--retry 5 \
+		--retry-delay 5 \
+		--request PUT ${RWS_ENDPOINT} \
+		--user $${RWS_AUTH} \
+		--form product=${PRODUCT_NAME}"; \
+	for f in $$(ls -I '*build*' -I '*.changes' ./build); do \
+		CURL_CMD="$${CURL_CMD} --form $$(basename $${f})=@./build/$${f}"; \
+	done; \
+	echo $${CURL_CMD}; \
+	$${CURL_CMD}
 
 source: deploy_prepare
 	if [ -n "$(GIT_TAG)" ]; then                                                                     \
@@ -161,13 +151,13 @@ source: deploy_prepare
 	TARBALL_COMPRESSOR=gz packpack/packpack tarball
 
 source_deploy: source
-	( aws --endpoint-url "${AWS_S3_ENDPOINT_URL}" s3 ls "${S3_BUCKET_URL}/" || \
-		( rm -rf "${BUCKET}" ; mkdir "${BUCKET}" &&                        \
+	( aws --endpoint-url "${AWS_S3_ENDPOINT_URL}" s3 ls "${S3_SOURCE_REPO_URL}/" || \
+		( rm -rf "${TARANTOOL_SERIES}" ; mkdir "${TARANTOOL_SERIES}" &&                        \
 			aws --endpoint-url "${AWS_S3_ENDPOINT_URL}"                \
-				s3 mv "${BUCKET}" "${S3_BUCKET_URL}" --recursive   \
+				s3 mv "${TARANTOOL_SERIES}" "${S3_SOURCE_REPO_URL}" --recursive   \
 				--acl public-read ) ) &&                           \
 		aws --endpoint-url "${AWS_S3_ENDPOINT_URL}"                        \
-			s3 cp build/*.tar.gz "${S3_BUCKET_URL}/" --acl public-read
+			s3 cp build/*.tar.gz "${S3_SOURCE_REPO_URL}/" --acl public-read
 
 # ###################
 # Performance testing

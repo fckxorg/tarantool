@@ -1,6 +1,10 @@
 -- error.lua (internal file)
 
 local ffi = require('ffi')
+local msgpack = require('msgpack')
+
+local mp_decode = msgpack.decode_unchecked
+
 ffi.cdef[[
 struct type_info;
 
@@ -11,6 +15,17 @@ enum {
 
 typedef void (*error_f)(struct error *e);
 
+struct error_field {
+    char *_data;
+    uint32_t _size;
+    char _name[1];
+};
+
+struct error_payload {
+    int _count;
+    struct error_field **_fields;
+};
+
 struct error {
     error_f _destroy;
     error_f _raise;
@@ -18,6 +33,8 @@ struct error {
     const struct type_info *_type;
     int64_t _refs;
     int _saved_errno;
+    int code;
+    struct error_payload _payload;
     /** Line number. */
     unsigned _line;
     /* Source file name. */
@@ -27,11 +44,6 @@ struct error {
     struct error *_cause;
     struct error *_effect;
 };
-
-char *
-exception_get_string(struct error *e, const struct method_info *method);
-int
-exception_get_int(struct error *e, const struct method_info *method);
 
 int
 error_set_prev(struct error *e, struct error *prev);
@@ -44,45 +56,10 @@ error_ref(struct error *e);
 
 void
 error_unref(struct error *e);
+
+const struct error_field *
+error_find_field(const struct error *e, const char *name);
 ]]
-
-local REFLECTION_CACHE = {}
-
-local function reflection_enumerate(err)
-    local key = tostring(err._type)
-    local result = REFLECTION_CACHE[key]
-    if result ~= nil then
-        return result
-    end
-    result = {}
-    -- See type_foreach_method() in reflection.h
-    local t = err._type
-    while t ~= nil do
-        local m = t.methods
-        while m.name ~= nil do
-            result[ffi.string(m.name)] = m
-            m = m + 1
-        end
-        t = t.parent
-    end
-    REFLECTION_CACHE[key] = result
-    return result
-end
-
-local function reflection_get(err, method)
-    if method.nargs ~= 0 then
-        return nil -- NYI
-    end
-    if method.rtype == ffi.C.CTYPE_INT then
-        return tonumber(ffi.C.exception_get_int(err, method))
-    elseif method.rtype == ffi.C.CTYPE_CONST_CHAR_PTR then
-        local str = ffi.C.exception_get_string(err, method)
-        if str == nil then
-            return nil
-        end
-        return ffi.string(str)
-    end
-end
 
 local function error_base_type(err)
     return ffi.string(err._type.name)
@@ -158,15 +135,15 @@ local function error_unpack(err)
     if not ffi.istype('struct error', err) then
         error("Usage: error:unpack()")
     end
-    local result = {}
+    local result = {code = err.code}
     for key, getter in pairs(error_fields)  do
         result[key] = getter(err)
     end
-    for key, getter in pairs(reflection_enumerate(err)) do
-        local value = reflection_get(err, getter)
-        if value ~= nil then
-            result[key] = value
-        end
+    local payload = err._payload
+    local fields = payload._fields
+    for i = 0, payload._count - 1 do
+        local f = fields[i]
+        result[ffi.string(f._name)] = mp_decode(f._data)
     end
     return result
 end
@@ -203,12 +180,9 @@ local function error_index(err, key)
     if getter ~= nil then
         return getter(err)
     end
-    getter = reflection_enumerate(err)[key]
-    if getter ~= nil and getter.nargs == 0 then
-        local val = reflection_get(err, getter)
-        if val ~= nil then
-            return val
-        end
+    local f = ffi.C.error_find_field(err, key)
+    if f ~= nil then
+        return mp_decode(f._data)
     end
     return error_methods[key]
 end

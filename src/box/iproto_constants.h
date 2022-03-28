@@ -139,6 +139,15 @@ enum iproto_key {
 	 * both iproto (e.g. REPLICA_ID) and raft (RAFT_TERM) keys.
 	 */
 	IPROTO_TERM = 0x53,
+	/** Protocol version. */
+	IPROTO_VERSION = 0x54,
+	/** Protocol features. */
+	IPROTO_FEATURES = 0x55,
+	/** Operation timeout. Specific to request type. */
+	IPROTO_TIMEOUT = 0x56,
+	/** Key name and data sent to a remote watcher. */
+	IPROTO_EVENT_KEY = 0x57,
+	IPROTO_EVENT_DATA = 0x58,
 	/*
 	 * Be careful to not extend iproto_key values over 0x7f.
 	 * iproto_keys are encoded in msgpack as positive fixnum, which ends at
@@ -171,30 +180,6 @@ enum iproto_ballot_key {
 	IPROTO_BALLOT_IS_BOOTED = 0x06,
 	IPROTO_BALLOT_CAN_LEAD = 0x07,
 };
-
-#define bit(c) (1ULL<<IPROTO_##c)
-
-#define IPROTO_HEAD_BMAP (bit(REQUEST_TYPE) | bit(SYNC) | bit(REPLICA_ID) |\
-			  bit(LSN) | bit(SCHEMA_VERSION))
-#define IPROTO_DML_BODY_BMAP (bit(SPACE_ID) | bit(INDEX_ID) | bit(LIMIT) |\
-			      bit(OFFSET) | bit(ITERATOR) | bit(INDEX_BASE) |\
-			      bit(KEY) | bit(TUPLE) | bit(OPS) | bit(TUPLE_META))
-
-static inline bool
-xrow_header_has_key(const char *pos, const char *end)
-{
-	unsigned char key = pos < end ? *pos : (unsigned char) IPROTO_KEY_MAX;
-	return key < IPROTO_KEY_MAX && IPROTO_HEAD_BMAP & (1ULL<<key);
-}
-
-static inline bool
-iproto_dml_body_has_key(const char *pos, const char *end)
-{
-	unsigned char key = pos < end ? *pos : (unsigned char) IPROTO_KEY_MAX;
-	return key < IPROTO_KEY_MAX && IPROTO_DML_BODY_BMAP & (1ULL<<key);
-}
-
-#undef bit
 
 static inline uint64_t
 iproto_key_bit(unsigned char key)
@@ -273,6 +258,30 @@ enum iproto_type {
 	IPROTO_REGISTER = 70,
 	IPROTO_JOIN_META = 71,
 	IPROTO_JOIN_SNAPSHOT = 72,
+	/** Protocol features request. */
+	IPROTO_ID = 73,
+	/**
+	 * The following three request types are used by the remote watcher
+	 * protocol (box.watch over network), which operates as follows:
+	 *
+	 *  1. The client sends an IPROTO_WATCH packet to subscribe to changes
+	 *     of a specified key defined on the server.
+	 *  2. The server sends an IPROTO_EVENT packet to the subscribed client
+	 *     with the key name and its current value unconditionally after
+	 *     registration and then every time the key value is updated
+	 *     provided the last notification was acknowledged (see below).
+	 *  3. Upon receiving a notification, the client sends an IPROTO_WATCH
+	 *     packet to acknowledge the notification.
+	 *  4. When the client doesn't want to receive any more notifications,
+	 *     it unsubscribes by sending an IPROTO_UNWATCH packet.
+	 *
+	 * All the three request types are fully asynchronous - a receiving end
+	 * doesn't send a packet in reply to any of them (therefore neither of
+	 * them has a sync number).
+	 */
+	IPROTO_WATCH = 74,
+	IPROTO_UNWATCH = 75,
+	IPROTO_EVENT = 76,
 
 	/** Vinyl run info stored in .index file */
 	VY_INDEX_RUN_INFO = 100,

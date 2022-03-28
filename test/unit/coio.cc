@@ -4,7 +4,11 @@
 #include "coio_task.h"
 #include "fio.h"
 #include "unit.h"
-#include "unit.h"
+#include "iostream.h"
+
+#include <fcntl.h>
+#include <sys/uio.h>
+#include <sys/errno.h>
 
 int
 touch_f(va_list ap)
@@ -32,7 +36,8 @@ stat_notify_test(FILE *f, const char *filename)
 	ev_stat stat;
 	note("filename: %s", filename);
 	coio_stat_init(&stat, filename);
-	coio_stat_stat_timeout(&stat, TIMEOUT_INFINITY);
+	int rc = coio_stat_stat_timeout(&stat, TIMEOUT_INFINITY);
+	fail_unless(rc == 0);
 	fail_unless(stat.prev.st_size < stat.attr.st_size);
 	fiber_cancel(touch);
 
@@ -46,7 +51,8 @@ stat_timeout_test(const char *filename)
 
 	ev_stat stat;
 	coio_stat_init(&stat, filename);
-	coio_stat_stat_timeout(&stat, 0.01);
+	int rc = coio_stat_stat_timeout(&stat, 0.01);
+	fail_unless(rc == 0);
 
 	footer();
 }
@@ -113,6 +119,142 @@ test_getaddrinfo(void)
 	footer();
 }
 
+static void
+test_connect(void)
+{
+	header();
+	plan(4);
+	int rc;
+	rc = coio_connect("~~~", "12345", 1, NULL, NULL);
+	ok(rc < 0, "bad ipv4 host name - error");
+	ok(strcmp(diag_get()->last->errmsg, "Invalid host name: ~~~") == 0,
+	   "bad ipv4 host name - error message");
+	rc = coio_connect("~~~", "12345", 2, NULL, NULL);
+	ok(rc < 0, "bad ipv6 host name - error");
+	ok(strcmp(diag_get()->last->errmsg, "Invalid host name: ~~~") == 0,
+	   "bad ipv6 host name - error message");
+	check_plan();
+	footer();
+}
+
+static int
+test_read_f(va_list ap)
+{
+	struct iostream *io = va_arg(ap, struct iostream *);
+	char buf[1024];
+	int rc = coio_read(io, buf, sizeof(buf));
+	if (rc < (ssize_t)sizeof(buf))
+		return -1;
+	return 0;
+}
+
+static int
+test_write_f(va_list ap)
+{
+	struct iostream *io = va_arg(ap, struct iostream *);
+	char buf[1024] = "";
+	int rc = coio_write_timeout(io, buf, sizeof(buf), TIMEOUT_INFINITY);
+	if (rc < (ssize_t)sizeof(buf))
+		return -1;
+	return 0;
+}
+
+static int
+test_writev_f(va_list ap)
+{
+	struct iostream *io = va_arg(ap, struct iostream *);
+	char buf[1024] = "";
+	struct iovec iov = {(void *)buf, sizeof(buf)};
+	int rc = coio_writev(io, &iov, 1, 0);
+	if (rc < (ssize_t)sizeof(buf))
+		return -1;
+	return 0;
+}
+
+static void
+fill_pipe(int fd)
+{
+	char buf[1024] = "";
+	int rc = 0;
+	while (rc >= 0 || errno == EINTR)
+		rc = write(fd, buf, sizeof(buf));
+	fail_unless(errno == EAGAIN || errno == EWOULDBLOCK);
+}
+
+static void
+empty_pipe(int fd)
+{
+	char buf[1024];
+	int rc = 0;
+	while (rc >= 0 || errno == EINTR)
+		rc = read(fd, buf, sizeof(buf));
+	fail_unless(errno == EAGAIN || errno == EWOULDBLOCK);
+}
+
+static void
+create_pipe(int fds[2])
+{
+	int rc = pipe(fds);
+	fail_unless(rc >= 0);
+	rc = fcntl(fds[0], F_SETFL, O_NONBLOCK);
+	fail_unless(rc >= 0);
+	rc = fcntl(fds[1], F_SETFL, O_NONBLOCK);
+	fail_unless(rc >= 0);
+}
+
+static void
+read_write_test(void)
+{
+	header();
+
+	fiber_func test_funcs[] = {
+		test_read_f,
+		test_write_f,
+		test_writev_f,
+	};
+	const char *descr[] = {
+		"read",
+		"write",
+		"writev",
+	};
+
+	int num_tests = sizeof(test_funcs) / sizeof(test_funcs[0]);
+	plan(2 * num_tests);
+
+	int fds[2];
+	create_pipe(fds);
+	for (int i = 0; i < num_tests; i++) {
+		struct iostream io;
+		if (i == 0) {
+			/* A non-readable fd, since the pipe is empty. */
+			plain_iostream_create(&io, fds[0]);
+		} else {
+			plain_iostream_create(&io, fds[1]);
+			/* Make the fd non-writable. */
+			fill_pipe(fds[1]);
+		}
+		struct fiber *f = fiber_new_xc("rw_test", test_funcs[i]);
+		fiber_set_joinable(f, true);
+		fiber_start(f, &io);
+		fiber_wakeup(f);
+		fiber_sleep(0);
+		ok(!fiber_is_dead(f), "coio_%s handle spurious wakeup",
+		   descr[i]);
+		if (i == 0)
+			fill_pipe(fds[1]);
+		else
+			empty_pipe(fds[0]);
+		int rc = fiber_join(f);
+		ok(rc == 0, "coio_%s success after a spurious wakeup",
+		   descr[i]);
+		iostream_destroy(&io);
+	}
+	close(fds[0]);
+	close(fds[1]);
+	check_plan();
+	footer();
+}
+
 static int
 main_f(va_list ap)
 {
@@ -132,6 +274,9 @@ main_f(va_list ap)
 	fiber_join(call_fiber);
 
 	test_getaddrinfo();
+	test_connect();
+
+	read_write_test();
 
 	ev_break(loop(), EVBREAK_ALL);
 	return 0;

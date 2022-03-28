@@ -153,10 +153,8 @@ blackhole_engine_create_space(struct engine *engine, struct space_def *def,
 
 	/* Allocate tuples on runtime arena, but check space format. */
 	struct tuple_format *format;
-	format = tuple_format_new(&tuple_format_runtime->vtab, NULL, NULL, 0,
-				  def->fields, def->field_count,
-				  def->exact_field_count, def->dict, false,
-				  false);
+	format = space_tuple_format_new(&tuple_format_runtime->vtab,
+					NULL, NULL, 0, def);
 	if (format == NULL) {
 		free(space);
 		return NULL;
@@ -188,6 +186,7 @@ static const struct engine_vtab blackhole_engine_vtab = {
 	/* .bootstrap = */ generic_engine_bootstrap,
 	/* .begin_initial_recovery = */ generic_engine_begin_initial_recovery,
 	/* .begin_final_recovery = */ generic_engine_begin_final_recovery,
+	/* .begin_hot_standby = */ generic_engine_begin_hot_standby,
 	/* .end_recovery = */ generic_engine_end_recovery,
 	/* .begin_checkpoint = */ generic_engine_begin_checkpoint,
 	/* .wait_checkpoint = */ generic_engine_wait_checkpoint,

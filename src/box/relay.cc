@@ -43,6 +43,7 @@
 #include "coio_task.h"
 #include "engine.h"
 #include "gc.h"
+#include "iostream.h"
 #include "iproto_constants.h"
 #include "recovery.h"
 #include "replication.h"
@@ -106,7 +107,7 @@ struct relay {
 	/** The thread in which we relay data to the replica. */
 	struct cord cord;
 	/** Replica connection */
-	struct ev_io io;
+	struct iostream *io;
 	/** Request sync */
 	uint64_t sync;
 	/** Recovery instance to read xlog from the disk */
@@ -134,11 +135,6 @@ struct relay {
 	 * is passed by the replica on subscribe.
 	 */
 	uint32_t id_filter;
-	/**
-	 * How many rows has this relay sent to the replica. Used to yield once
-	 * in a while when reading a WAL to unblock the event loop.
-	 */
-	int64_t row_count;
 	/**
 	 * Local vclock at the moment of subscribe, used to check
 	 * dataset on the other side and send missing data rows if any.
@@ -290,20 +286,36 @@ relay_yield(struct xstream *stream)
 }
 
 static void
-relay_start(struct relay *relay, int fd, uint64_t sync,
-	     void (*stream_write)(struct xstream *, struct xrow_header *))
+relay_send_heartbeat(struct relay *relay);
+
+/** A callback for recovery to send heartbeats while scanning a WAL. */
+static void
+relay_yield_and_send_heartbeat(struct xstream *stream)
 {
-	xstream_create(&relay->stream, stream_write, relay_yield);
+	struct relay *relay = container_of(stream, struct relay, stream);
+	/* Check for a heartbeat timeout. */
+	if (ev_monotonic_now(loop()) - relay->last_row_time >
+	    replication_timeout) {
+		relay_send_heartbeat(relay);
+	}
+	fiber_sleep(0);
+}
+
+static void
+relay_start(struct relay *relay, struct iostream *io, uint64_t sync,
+	     void (*stream_write)(struct xstream *, struct xrow_header *),
+	     void (*stream_cb)(struct xstream *))
+{
+	xstream_create(&relay->stream, stream_write, stream_cb);
 	/*
 	 * Clear the diagnostics at start, in case it has the old
 	 * error message which we keep around to display in
 	 * box.info.replication.
 	 */
 	diag_clear(&relay->diag);
-	coio_create(&relay->io, fd);
+	relay->io = io;
 	relay->sync = sync;
 	relay->state = RELAY_FOLLOW;
-	relay->row_count = 0;
 	relay->last_row_time = ev_monotonic_now(loop());
 }
 
@@ -347,6 +359,7 @@ relay_stop(struct relay *relay)
 		free(gc_msg);
 	}
 	stailq_create(&relay->pending_gc);
+	relay->io = NULL;
 	if (relay->r != NULL)
 		recovery_delete(relay->r);
 	relay->r = NULL;
@@ -392,14 +405,14 @@ relay_set_cord_name(int fd)
 }
 
 void
-relay_initial_join(int fd, uint64_t sync, struct vclock *vclock,
+relay_initial_join(struct iostream *io, uint64_t sync, struct vclock *vclock,
 		   uint32_t replica_version_id)
 {
 	struct relay *relay = relay_new(NULL);
 	if (relay == NULL)
 		diag_raise();
 
-	relay_start(relay, fd, sync, relay_send_initial_join_row);
+	relay_start(relay, io, sync, relay_send_initial_join_row, relay_yield);
 	auto relay_guard = make_scoped_guard([=] {
 		relay_stop(relay);
 		relay_delete(relay);
@@ -436,7 +449,7 @@ relay_initial_join(int fd, uint64_t sync, struct vclock *vclock,
 	struct xrow_header row;
 	xrow_encode_vclock_xc(&row, vclock);
 	row.sync = sync;
-	coio_write_xrow(&relay->io, &row);
+	coio_write_xrow(relay->io, &row);
 
 	/*
 	 * Version is present starting with 2.7.3, 2.8.2, 2.9.1
@@ -471,7 +484,7 @@ relay_final_join_f(va_list ap)
 	auto guard = make_scoped_guard([=] { relay_exit(relay); });
 
 	coio_enable();
-	relay_set_cord_name(relay->io.fd);
+	relay_set_cord_name(relay->io->fd);
 
 	/* Send all WALs until stop_vclock */
 	assert(relay->stream.write != NULL);
@@ -482,14 +495,14 @@ relay_final_join_f(va_list ap)
 }
 
 void
-relay_final_join(int fd, uint64_t sync, struct vclock *start_vclock,
-		 struct vclock *stop_vclock)
+relay_final_join(struct iostream *io, uint64_t sync,
+		 struct vclock *start_vclock, struct vclock *stop_vclock)
 {
 	struct relay *relay = relay_new(NULL);
 	if (relay == NULL)
 		diag_raise();
 
-	relay_start(relay, fd, sync, relay_send_row);
+	relay_start(relay, io, sync, relay_send_row, relay_yield);
 	auto relay_guard = make_scoped_guard([=] {
 		relay_stop(relay);
 		relay_delete(relay);
@@ -543,6 +556,7 @@ tx_status_update(struct cmsg *msg)
 	struct replication_ack ack;
 	ack.source = status->relay->replica->id;
 	ack.vclock = &status->vclock;
+	bool anon = status->relay->replica->anon;
 	/*
 	 * Let pending synchronous transactions know, which of
 	 * them were successfully sent to the replica. Acks are
@@ -550,7 +564,7 @@ tx_status_update(struct cmsg *msg)
 	 * the single master in 100% so far). Other instances wait
 	 * for master's CONFIRM message instead.
 	 */
-	if (txn_limbo.owner_id == instance_id) {
+	if (txn_limbo.owner_id == instance_id && !anon) {
 		txn_limbo_ack(&txn_limbo, ack.source,
 			      vclock_get(ack.vclock, instance_id));
 	}
@@ -675,13 +689,11 @@ relay_reader_f(va_list ap)
 	struct fiber *relay_f = va_arg(ap, struct fiber *);
 
 	struct ibuf ibuf;
-	struct ev_io io;
-	coio_create(&io, relay->io.fd);
 	ibuf_create(&ibuf, &cord()->slabc, 1024);
 	try {
 		while (!fiber_is_cancelled()) {
 			struct xrow_header xrow;
-			coio_read_xrow_timeout_xc(&io, &ibuf, &xrow,
+			coio_read_xrow_timeout_xc(relay->io, &ibuf, &xrow,
 					replication_disconnect_timeout());
 			xrow_decode_vclock_xc(&xrow, &relay->recv_vclock);
 			/*
@@ -817,7 +829,7 @@ relay_subscribe_f(va_list ap)
 	struct relay *relay = va_arg(ap, struct relay *);
 
 	coio_enable();
-	relay_set_cord_name(relay->io.fd);
+	relay_set_cord_name(relay->io->fd);
 
 	/* Create cpipe to tx for propagating vclock. */
 	cbus_endpoint_create(&relay->endpoint, tt_sprintf("relay_%p", relay),
@@ -938,14 +950,14 @@ relay_subscribe_f(va_list ap)
 	assert(!diag_is_empty(&relay->diag));
 	diag_set_error(diag_get(), diag_last_error(&relay->diag));
 	diag_log();
-	say_crit("exiting the relay loop");
+	say_info("exiting the relay loop");
 
 	return -1;
 }
 
 /** Replication acceptor fiber handler. */
 void
-relay_subscribe(struct replica *replica, int fd, uint64_t sync,
+relay_subscribe(struct replica *replica, struct iostream *io, uint64_t sync,
 		struct vclock *replica_clock, uint32_t replica_version_id,
 		uint32_t replica_id_filter)
 {
@@ -965,7 +977,8 @@ relay_subscribe(struct replica *replica, int fd, uint64_t sync,
 		gc_delay_unref();
 	}
 
-	relay_start(relay, fd, sync, relay_send_row);
+	relay_start(relay, io, sync, relay_send_row,
+		    relay_yield_and_send_heartbeat);
 	auto relay_guard = make_scoped_guard([=] {
 		relay_stop(relay);
 		replica_on_relay_stop(replica);
@@ -999,7 +1012,7 @@ relay_send(struct relay *relay, struct xrow_header *packet)
 
 	packet->sync = relay->sync;
 	relay->last_row_time = ev_monotonic_now(loop());
-	coio_write_xrow(&relay->io, packet);
+	coio_write_xrow(relay->io, packet);
 	fiber_gc();
 
 	struct errinj *inj = errinj(ERRINJ_RELAY_TIMEOUT, ERRINJ_DOUBLE);

@@ -3,6 +3,7 @@
 --
 
 box.cfg
+audit_nonblock:true
 background:false
 checkpoint_count:2
 checkpoint_interval:3600
@@ -36,16 +37,19 @@ replication_connect_timeout:30
 replication_skip_conflict:false
 replication_sync_lag:10
 replication_sync_timeout:300
-replication_synchro_quorum:1
+replication_synchro_quorum:N / 2 + 1
 replication_synchro_timeout:5
+replication_threads:1
 replication_timeout:1
 slab_alloc_factor:1.05
 slab_alloc_granularity:8
 sql_cache_size:5242880
 strip_core:true
 too_long_threshold:0.5
+txn_timeout:3153600000
 vinyl_bloom_fpr:0.05
 vinyl_cache:134217728
+vinyl_defer_deletes:false
 vinyl_dir:.
 vinyl_max_tuple_size:1048576
 vinyl_memory:134217728

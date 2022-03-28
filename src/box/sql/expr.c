@@ -1010,6 +1010,7 @@ sql_expr_new_int(struct sql *db, int value)
 {
 	struct Expr *e = sql_expr_new_empty(db, TK_INTEGER, 0);
 	if (e != NULL) {
+		e->type = FIELD_TYPE_INTEGER;
 		e->flags |= EP_IntValue;
 		e->u.iValue = value;
 	}
@@ -1910,25 +1911,6 @@ sqlExprListSetSortOrder(struct ExprList *p, enum sort_order sort_order)
 		return;
 	}
 	p->a[p->nExpr - 1].sort_order = sort_order;
-}
-
-void
-sql_expr_check_sort_orders(struct Parse *parse,
-			   const struct ExprList *expr_list)
-{
-	if(expr_list == NULL)
-		return;
-	enum sort_order reference_order = expr_list->a[0].sort_order;
-	for (int i = 1; i < expr_list->nExpr; i++) {
-		assert(expr_list->a[i].sort_order != SORT_ORDER_UNDEF);
-		if (expr_list->a[i].sort_order != reference_order) {
-			diag_set(ClientError, ER_UNSUPPORTED,
-				 "ORDER BY with LIMIT",
-				 "different sorting orders");
-			parse->is_aborted = true;
-			return;
-		}
-	}
 }
 
 /*
@@ -3286,6 +3268,30 @@ codeReal(Vdbe * v, const char *z, int negateFlag, int iMem)
 	}
 }
 
+static void
+expr_code_dec(struct Parse *parser, struct Expr *expr, bool is_neg, int reg)
+{
+	const char *str = expr->u.zToken;
+	assert(str != NULL);
+	decimal_t *value = sqlDbMallocRawNN(sql_get(), sizeof(*value));
+	if (value == NULL)
+		goto error;
+	if (is_neg) {
+		decimal_t dec;
+		if (decimal_from_string(&dec, str) == NULL)
+			goto error;
+		decimal_minus(value, &dec);
+	} else if (decimal_from_string(value, str) == NULL) {
+		goto error;
+	}
+	sqlVdbeAddOp4(parser->pVdbe, OP_Decimal, 0, reg, 0, (char *)value,
+		      P4_DEC);
+	return;
+error:
+	sqlDbFree(sql_get(), value);
+	parser->is_aborted = true;
+}
+
 /**
  * Generate an instruction that will put the integer describe by
  * text z[0..n-1] into register iMem.
@@ -3343,6 +3349,22 @@ int_overflow:
 		value = -value;
 	sqlVdbeAddOp4Dup8(v, OP_Int64, 0, mem, 0, (u8 *) &value,
 			  is_neg ? P4_INT64 : P4_UINT64);
+}
+
+static void
+expr_code_array(struct Parse *parser, struct Expr *expr, int reg)
+{
+	struct Vdbe *vdbe = parser->pVdbe;
+	struct ExprList *list = expr->x.pList;
+	if (list == NULL) {
+		sqlVdbeAddOp3(vdbe, OP_Array, 0, reg, 0);
+		return;
+	}
+	int count = list->nExpr;
+	int values_reg = parser->nMem + 1;
+	parser->nMem += count;
+	sqlExprCodeExprList(parser, list, values_reg, 0, SQL_ECEL_FACTOR);
+	sqlVdbeAddOp3(vdbe, OP_Array, count, reg, values_reg);
 }
 
 /*
@@ -3725,6 +3747,10 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			sqlVdbeAddOp2(v, OP_Bool, op == TK_TRUE, target);
 			return target;
 		}
+	case TK_DECIMAL:{
+			expr_code_dec(pParse, pExpr, false, target);
+			return target;
+		}
 	case TK_FLOAT:{
 			assert(!ExprHasProperty(pExpr, EP_IntValue));
 			codeReal(v, pExpr->u.zToken, 0, target);
@@ -3791,6 +3817,10 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 			sql_expr_type_cache_change(pParse, inReg, 1);
 			return inReg;
 		}
+
+	case TK_ARRAY:
+		expr_code_array(pParse, pExpr, target);
+		break;
 
 	case TK_LT:
 	case TK_LE:
@@ -3884,8 +3914,12 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				assert(!ExprHasProperty(pExpr, EP_IntValue));
 				codeReal(v, pLeft->u.zToken, 1, target);
 				return target;
+			} else if (pLeft->op == TK_DECIMAL) {
+				expr_code_dec(pParse, pLeft, true, target);
+				return target;
 			} else {
 				tempX.op = TK_INTEGER;
+				tempX.type = FIELD_TYPE_INTEGER;
 				tempX.flags = EP_IntValue | EP_TokenOnly;
 				tempX.u.iValue = 0;
 				r1 = sqlExprCodeTemp(pParse, &tempX,
@@ -4102,23 +4136,24 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				pParse->is_aborted = true;
 				return 0;
 			}
-			if (sql_func_flag_is_set(func, SQL_FUNC_NEEDCOLL)) {
-				sqlVdbeAddOp4(v, OP_CollSeq, 0, 0, 0,
-						  (char *)coll, P4_COLLSEQ);
-			}
 			if (func->def->language == FUNC_LANGUAGE_SQL_BUILTIN) {
-				sqlVdbeAddOp4(v, OP_BuiltinFunction0, constMask,
-					      r1, target, (char *)func,
-					      P4_FUNC);
+				struct sql_context *ctx =
+					sql_context_new(func, coll);
+				if (ctx == NULL) {
+					pParse->is_aborted = true;
+					return -1;
+				}
+				sqlVdbeAddOp4(v, OP_BuiltinFunction, nFarg,
+					      r1, target, (char *)ctx,
+					      P4_FUNCCTX);
 			} else {
-				sqlVdbeAddOp4(v, OP_FunctionByName, constMask,
+				sqlVdbeAddOp4(v, OP_FunctionByName, nFarg,
 					      r1, target,
 					      sqlDbStrNDup(pParse->db,
 							   func->def->name,
 							   func->def->name_len),
 					      P4_DYNAMIC);
 			}
-			sqlVdbeChangeP5(v, (u8) nFarg);
 			if (nFarg && constMask == 0) {
 				sqlReleaseTempRange(pParse, r1, nFarg);
 			}
@@ -5415,6 +5450,17 @@ analyzeAggregate(Walker * pWalker, Expr * pExpr)
 						       (pExpr, EP_xIsSelect));
 						pItem = &pAggInfo->aFunc[i];
 						pItem->pExpr = pExpr;
+						int n = pExpr->x.pList == NULL ?
+							0 : pExpr->x.pList->nExpr;
+						/*
+						 * Allocate n MEMs for arguments
+						 * and one more MEM for
+						 * accumulator. This makes it
+						 * easier to pass these n + 1
+						 * MEMs to the user-defined
+						 * aggregate function.
+						 */
+						pParse->nMem += n;
 						pItem->iMem = ++pParse->nMem;
 						assert(!ExprHasProperty
 						       (pExpr, EP_IntValue));
@@ -5425,12 +5471,6 @@ analyzeAggregate(Walker * pWalker, Expr * pExpr)
 								true;
 							return WRC_Abort;
 						}
-						assert(pItem->func->def->
-						       language ==
-						       FUNC_LANGUAGE_SQL_BUILTIN &&
-						       pItem->func->def->
-						       aggregate ==
-						       FUNC_AGGREGATE_GROUP);
 						if (pExpr->flags & EP_Distinct) {
 							pItem->iDistinct =
 								pParse->nTab++;

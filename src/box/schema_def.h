@@ -309,10 +309,11 @@ enum schema_object_type {
 	schema_object_type_MAX = 8,
 	SC_ENTITY_SPACE,
 	SC_ENTITY_FUNCTION,
-	SC_ENTITY_ROLE,
 	SC_ENTITY_USER,
+	SC_ENTITY_ROLE,
 	SC_ENTITY_SEQUENCE,
-	SC_ENTITY_COLLATION
+	SC_ENTITY_COLLATION,
+	schema_entity_type_MAX = 15
 };
 
 /** SQL Storage engine. */
@@ -335,6 +336,9 @@ schema_object_type(const char *name);
 
 const char *
 schema_object_name(enum schema_object_type type);
+
+const char *
+schema_entity_name(enum schema_object_type type);
 
 #if defined(__cplusplus)
 } /* extern "C" */

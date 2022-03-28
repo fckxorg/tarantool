@@ -241,13 +241,9 @@ memtx_tx_manager_init()
 			       cord_slab_cache(), item_size);
 	}
 	txm.history = mh_history_new();
-	if (txm.history == NULL)
-		panic("mh_history_new()");
 	mempool_create(&txm.point_hole_item_pool,
 		       cord_slab_cache(), sizeof(struct point_hole_item));
 	txm.point_holes = mh_point_holes_new();
-	if (txm.point_holes == NULL)
-		panic("mh_history_new()");
 	mempool_create(&txm.gap_item_mempoool,
 		       cord_slab_cache(), sizeof(struct gap_item));
 	mempool_create(&txm.full_scan_item_mempool,
@@ -295,6 +291,7 @@ memtx_tx_abort_all_for_ddl(struct txn *ddl_owner)
 		    to_be_aborted->status != TXN_IN_READ_VIEW)
 			continue;
 		to_be_aborted->status = TXN_CONFLICTED;
+		txn_set_flags(to_be_aborted, TXN_IS_CONFLICTED);
 		say_warn("Transaction committing DDL (id=%lld) has aborted "
 			 "another TX (id=%lld)", (long long) ddl_owner->id,
 			 (long long) to_be_aborted->id);
@@ -364,6 +361,7 @@ memtx_tx_handle_conflict(struct txn *breaker, struct txn *victim)
 	} else {
 		/* Mark as conflicted. */
 		victim->status = TXN_CONFLICTED;
+		txn_set_flags(victim, TXN_IS_CONFLICTED);
 	}
 }
 
@@ -392,13 +390,7 @@ memtx_tx_story_new(struct space *space, struct tuple *tuple)
 	const struct memtx_story **put_story =
 		(const struct memtx_story **) &story;
 	struct memtx_story **empty = NULL;
-	mh_int_t pos = mh_history_put(txm.history, put_story, &empty, 0);
-	if (pos == mh_end(txm.history)) {
-		mempool_free(pool, story);
-		diag_set(OutOfMemory, pos + 1, "mh_history_put",
-			 "mh_history_node");
-		return NULL;
-	}
+	mh_history_put(txm.history, put_story, &empty, 0);
 	tuple->is_dirty = true;
 	tuple_ref(tuple);
 
@@ -697,10 +689,16 @@ memtx_tx_story_unlink_top(struct memtx_story *story, uint32_t idx)
 	struct memtx_story_link *link = &story->link[idx];
 
 	assert(link->newer_story == NULL);
-	struct index *index = story->space->index[idx];
+	/*
+	 * Note that link[idx].in_index may not be the same as
+	 * story->space->index[idx] in case space is going to be deleted
+	 * in memtx_tx_on_space_delete(): during space alter operation we
+	 * swap all indexes to the new space object and instead use dummy
+	 * structs.
+	 */
+	struct index *index = story->link[idx].in_index;
 
 	struct memtx_story *old_story = link->older_story;
-	assert(story->link[idx].in_index == index);
 	assert(old_story == NULL || old_story->link[idx].in_index == NULL);
 	struct tuple *old_tuple = old_story == NULL ? NULL : old_story->tuple;
 	struct tuple *removed, *unused;
@@ -1535,8 +1533,6 @@ memtx_tx_history_add_insert_stmt(struct txn_stmt *stmt,
 		/*
 		 * The result must be a referenced pointer. The caller must
 		 * unreference it by itself.
-		 * Actually now it goes only to stmt->old_tuple, and
-		 * stmt->old_tuple is unreferenced when stmt is destroyed.
 		 */
 		tuple_ref(*result);
 	}
@@ -1599,8 +1595,6 @@ memtx_tx_history_add_delete_stmt(struct txn_stmt *stmt,
 		/*
 		 * The result must be a referenced pointer. The caller must
 		 * unreference it by itself.
-		 * Actually now it goes only to stmt->old_tuple, and
-		 * stmt->old_tuple is unreferenced when stmt is destroyed.
 		 */
 		tuple_ref(*result);
 	}
@@ -1616,9 +1610,7 @@ memtx_tx_history_add_stmt(struct txn_stmt *stmt, struct tuple *old_tuple,
 	assert(stmt != NULL);
 	assert(stmt->space != NULL);
 	assert(new_tuple != NULL || old_tuple != NULL);
-	assert(new_tuple == stmt->new_tuple);
 	assert(new_tuple == NULL || !new_tuple->is_dirty);
-	assert(result == &stmt->old_tuple);
 
 	if (new_tuple != NULL)
 		return memtx_tx_history_add_insert_stmt(stmt, old_tuple,
@@ -1633,7 +1625,7 @@ void
 memtx_tx_history_rollback_stmt(struct txn_stmt *stmt)
 {
 	if (stmt->add_story != NULL) {
-		assert(stmt->add_story->tuple == stmt->new_tuple);
+		assert(stmt->add_story->tuple == stmt->rollback_info.new_tuple);
 		struct memtx_story *story = stmt->add_story;
 
 		/*
@@ -1891,20 +1883,18 @@ memtx_tx_history_prepare_stmt(struct txn_stmt *stmt)
 		stmt->del_story->del_psn = stmt->txn->psn;
 }
 
-ssize_t
-memtx_tx_history_commit_stmt(struct txn_stmt *stmt)
+void
+memtx_tx_history_commit_stmt(struct txn_stmt *stmt, size_t *bsize)
 {
-	ssize_t res = 0;
 	if (stmt->add_story != NULL) {
 		assert(stmt->add_story->add_stmt == stmt);
-		res += tuple_bsize(stmt->add_story->tuple);
+		*bsize += tuple_bsize(stmt->add_story->tuple);
 		memtx_tx_story_unlink_added_by(stmt->add_story, stmt);
 	}
 	if (stmt->del_story != NULL) {
-		res -= tuple_bsize(stmt->del_story->tuple);
+		*bsize -= tuple_bsize(stmt->del_story->tuple);
 		memtx_tx_story_unlink_deleted_by(stmt->del_story, stmt);
 	}
-	return res;
 }
 
 struct tuple *
@@ -2024,20 +2014,19 @@ memtx_tx_on_space_delete(struct space *space)
 			= rlist_first_entry(&space->memtx_stories,
 					    struct memtx_story,
 					    in_space_stories);
+		/*
+		 * Space is to be altered (not necessarily dropped). Since
+		 * this operation is considered to be DDL, all other
+		 * transactions will be aborted anyway. We can't postpone
+		 * rollback till actual call of commit/rollback since stories
+		 * should be destroyed immediately.
+		 */
+		if (story->add_stmt != NULL)
+			memtx_tx_history_rollback_stmt(story->add_stmt);
+		if (story->del_stmt != NULL)
+			memtx_tx_history_rollback_stmt(story->del_stmt);
 		rlist_del(&story->in_space_stories);
 		memtx_tx_story_full_unlink(story);
-		if (story->add_stmt != NULL) {
-			story->add_stmt->add_story = NULL;
-			story->add_stmt->space = NULL;
-			story->add_stmt = NULL;
-		}
-		while (story->del_stmt != NULL) {
-			struct txn_stmt *stmt = story->del_stmt;
-			stmt->del_story = NULL;
-			story->del_stmt = stmt->next_in_del_list;
-			stmt->next_in_del_list = NULL;
-			stmt->space = NULL;
-		}
 		memtx_tx_story_delete(story);
 	}
 }
@@ -2190,14 +2179,7 @@ point_hole_storage_new(struct index *index, const char *key,
 		(const struct point_hole_item **) &object;
 	struct point_hole_item *replaced = NULL;
 	struct point_hole_item **preplaced = &replaced;
-	mh_int_t pos = mh_point_holes_put(txm.point_holes, put,
-					    &preplaced, 0);
-	if (pos == mh_end(txm.point_holes)) {
-		mempool_free(pool, object);
-		diag_set(OutOfMemory, pos + 1, "mh_holes_storage_put",
-			 "mh_holes_storage_node");
-		return -1;
-	}
+	mh_point_holes_put(txm.point_holes, put, &preplaced, 0);
 	if (preplaced != NULL) {
 		/*
 		 * The item in hash table was overwitten. It's OK, but
@@ -2237,9 +2219,7 @@ point_hole_storage_delete(struct point_hole_item *object)
 			(const struct point_hole_item **) &another;
 		struct point_hole_item *replaced = NULL;
 		struct point_hole_item **preplaced = &replaced;
-		mh_int_t pos = mh_point_holes_put(txm.point_holes, put,
-						    &preplaced, 0);
-		assert(pos != mh_end(txm.point_holes)); (void)pos;
+		mh_point_holes_put(txm.point_holes, put, &preplaced, 0);
 		assert(replaced == object);
 		rlist_del(&object->ring);
 		another->is_head = true;
@@ -2254,7 +2234,6 @@ point_hole_storage_delete(struct point_hole_item *object)
 		mh_int_t pos = mh_point_holes_put_slot(txm.point_holes, put,
 						       &exist, 0);
 		assert(exist);
-		assert(pos != mh_end(txm.point_holes));
 		mh_point_holes_del(txm.point_holes, pos, 0);
 		txm.point_holes_size--;
 	}
@@ -2456,21 +2435,14 @@ struct memtx_tx_snapshot_cleaner_entry
 #define MH_SOURCE
 #include "salad/mhash.h"
 
-int
+void
 memtx_tx_snapshot_cleaner_create(struct memtx_tx_snapshot_cleaner *cleaner,
-				 struct space *space, const char *index_name)
+				 struct space *space)
 {
 	cleaner->ht = NULL;
 	if (space == NULL || rlist_empty(&space->memtx_stories))
-		return 0;
+		return;
 	struct mh_snapshot_cleaner_t *ht = mh_snapshot_cleaner_new();
-	if (ht == NULL) {
-		diag_set(OutOfMemory, sizeof(*ht),
-			 index_name, "snapshot cleaner");
-		free(ht);
-		return -1;
-	}
-
 	struct memtx_story *story;
 	rlist_foreach_entry(story, &space->memtx_stories, in_space_stories) {
 		struct tuple *tuple = story->tuple;
@@ -2483,17 +2455,10 @@ memtx_tx_snapshot_cleaner_create(struct memtx_tx_snapshot_cleaner *cleaner,
 		struct memtx_tx_snapshot_cleaner_entry entry;
 		entry.from = tuple;
 		entry.to = clean;
-		mh_int_t res =  mh_snapshot_cleaner_put(ht,  &entry, NULL, 0);
-		if (res == mh_end(ht)) {
-			diag_set(OutOfMemory, sizeof(entry),
-				 index_name, "snapshot rollback entry");
-			mh_snapshot_cleaner_delete(ht);
-			return -1;
-		}
+		mh_snapshot_cleaner_put(ht,  &entry, NULL, 0);
 	}
 
 	cleaner->ht = ht;
-	return 0;
 }
 
 struct tuple *

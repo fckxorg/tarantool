@@ -270,7 +270,7 @@ columnlist ::= tcons.
   QUERY KEY OFFSET RAISE RELEASE REPLACE RESTRICT
   RENAME CTIME_KW IF ENABLE DISABLE UUID
   .
-%wildcard ANY.
+%wildcard WILDCARD.
 
 
 // And "ids" is an identifer-or-string.
@@ -548,8 +548,6 @@ oneselect(A) ::= SELECT(S) distinct(D) selcollist(W) from(X) where_opt(Y)
 #ifdef SQL_DEBUG
   Token s = S; /*A-overwrites-S*/
 #endif
-  if (L.pLimit != NULL)
-    sql_expr_check_sort_orders(pParse, Z);
   A = sqlSelectNew(pParse,W,X,Y,P,Q,Z,D,L.pLimit,L.pOffset);
 #ifdef SQL_DEBUG
   /* Populate the Select.zSelName[] string that is used to help with
@@ -994,6 +992,9 @@ idlist(A) ::= nm(Y). {
       case TK_FLOAT:
         p->type = FIELD_TYPE_DOUBLE;
         break;
+      case TK_DECIMAL:
+        p->type = FIELD_TYPE_DECIMAL;
+        break;
       case TK_TRUE:
       case TK_FALSE:
       case TK_UNKNOWN:
@@ -1071,6 +1072,7 @@ term(A) ::= STRING(X).     {spanExpr(&A,pParse,@X,X);/*A-overwrites-X*/}
 term(A) ::= FALSE(X) . {spanExpr(&A,pParse,@X,X);/*A-overwrites-X*/}
 term(A) ::= TRUE(X) . {spanExpr(&A,pParse,@X,X);/*A-overwrites-X*/}
 term(A) ::= UNKNOWN(X) . {spanExpr(&A,pParse,@X,X);/*A-overwrites-X*/}
+term(A) ::= DECIMAL(X) . {spanExpr(&A,pParse,@X,X);/*A-overwrites-X*/}
 
 term(A) ::= INTEGER(X). {
   A.pExpr = sql_expr_new_dequoted(pParse->db, TK_INTEGER, &X);
@@ -1122,6 +1124,20 @@ expr(A) ::= CAST(X) LP expr(E) AS typedef(T) RP(Y). {
   }
   A.pExpr->type = T.type;
   sqlExprAttachSubtrees(pParse->db, A.pExpr, E.pExpr, 0);
+}
+
+expr(A) ::= LB(X) exprlist(Y) RB(E). {
+  struct Expr *expr = sql_expr_new_anon(pParse->db, TK_ARRAY);
+  if (expr == NULL) {
+    sql_expr_list_delete(pParse->db, Y);
+    pParse->is_aborted = true;
+    return;
+  }
+  expr->x.pList = Y;
+  expr->type = FIELD_TYPE_ARRAY;
+  sqlExprSetHeightAndFlags(pParse, expr);
+  A.pExpr = expr;
+  spanSet(&A, &X, &E);
 }
 
 expr(A) ::= TRIM(X) LP trim_operands(Y) RP(E). {
@@ -1837,6 +1853,10 @@ typedef(A) ::= BOOL . { A.type = FIELD_TYPE_BOOLEAN; }
 typedef(A) ::= BOOLEAN . { A.type = FIELD_TYPE_BOOLEAN; }
 typedef(A) ::= VARBINARY . { A.type = FIELD_TYPE_VARBINARY; }
 typedef(A) ::= UUID . { A.type = FIELD_TYPE_UUID; }
+typedef(A) ::= ANY . { A.type = FIELD_TYPE_ANY; }
+typedef(A) ::= ARRAY . { A.type = FIELD_TYPE_ARRAY; }
+typedef(A) ::= MAP . { A.type = FIELD_TYPE_MAP; }
+typedef(A) ::= DATETIME . { A.type = FIELD_TYPE_DATETIME; }
 
 /**
  * Time-like types are temporary disabled, until they are

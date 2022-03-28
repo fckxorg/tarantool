@@ -109,16 +109,10 @@ func_split_name(const char *str, struct func_name *name)
 /** Schema modules hash. */
 static struct mh_strnptr_t *modules = NULL;
 
-int
+void
 schema_module_init(void)
 {
 	modules = mh_strnptr_new();
-	if (modules == NULL) {
-		diag_set(OutOfMemory, sizeof(*modules), "malloc",
-			  "modules hash table");
-		return -1;
-	}
-	return 0;
 }
 
 void
@@ -134,7 +128,7 @@ schema_module_free(void)
 static struct schema_module *
 cache_find(const char *name, const char *name_end)
 {
-	mh_int_t i = mh_strnptr_find_inp(modules, name, name_end - name);
+	mh_int_t i = mh_strnptr_find_str(modules, name, name_end - name);
 	if (i == mh_end(modules))
 		return NULL;
 	return mh_strnptr_node(modules, i)->val;
@@ -143,7 +137,7 @@ cache_find(const char *name, const char *name_end)
 /**
  * Save a module to the modules cache.
  */
-static int
+static void
 cache_put(struct schema_module *module)
 {
 	const char *str = module->base->package;
@@ -158,18 +152,12 @@ cache_put(struct schema_module *module)
 
 	struct mh_strnptr_node_t prev;
 	struct mh_strnptr_node_t *prev_ptr = &prev;
-
-	if (mh_strnptr_put(modules, &strnode, &prev_ptr, NULL) == mh_end(modules)) {
-		diag_set(OutOfMemory, sizeof(strnode), "malloc", "modules");
-		return -1;
-	}
-
+	mh_strnptr_put(modules, &strnode, &prev_ptr, NULL);
 	/*
 	 * Just to make sure we haven't replaced something, the
 	 * entries must be explicitly deleted.
 	 */
 	assert(prev_ptr == NULL);
-	return 0;
 }
 
 /**
@@ -181,7 +169,7 @@ cache_update(struct schema_module *module)
 	const char *str = module->base->package;
 	size_t len = module->base->package_len;
 
-	mh_int_t i = mh_strnptr_find_inp(modules, str, len);
+	mh_int_t i = mh_strnptr_find_str(modules, str, len);
 	if (i == mh_end(modules))
 		panic("func: failed to update cache: %s", str);
 
@@ -198,7 +186,7 @@ cache_del(struct schema_module *module)
 	const char *str = module->base->package;
 	size_t len = module->base->package_len;
 
-	mh_int_t i = mh_strnptr_find_inp(modules, str, len);
+	mh_int_t i = mh_strnptr_find_str(modules, str, len);
 	if (i != mh_end(modules)) {
 		struct schema_module *v;
 		v = mh_strnptr_node(modules, i)->val;
@@ -411,6 +399,7 @@ func_new(struct func_def *def)
 	if (func == NULL)
 		return NULL;
 	func->def = def;
+	rlist_create(&func->func_cache_pin_list);
 	/** Nobody has access to the function but the owner. */
 	memset(func->access, 0, sizeof(func->access));
 	/*
@@ -469,10 +458,7 @@ func_c_load(struct func_c *func)
 		module = schema_module_load(name.package, name.package_end);
 		if (module == NULL)
 			return -1;
-		if (cache_put(module)) {
-			schema_module_unref(module);
-			return -1;
-		}
+		cache_put(module);
 	} else {
 		module = cached;
 		schema_module_ref(module);
@@ -515,6 +501,7 @@ static struct func_vtab func_c_vtab = {
 void
 func_delete(struct func *func)
 {
+	assert(rlist_empty(&func->func_cache_pin_list));
 	struct func_def *def = func->def;
 	credentials_destroy(&func->owner_credentials);
 	func->vtab->destroy(func);

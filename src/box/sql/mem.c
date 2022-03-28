@@ -43,8 +43,9 @@
 #include "lua/serializer.h"
 #include "lua/msgpack.h"
 #include "lua/decimal.h"
-#include "uuid/mp_uuid.h"
+#include "mp_datetime.h"
 #include "mp_decimal.h"
+#include "mp_uuid.h"
 
 #define CMP_OLD_NEW(a, b, type) (((a) > (type)(b)) - ((a) < (type)(b)))
 
@@ -76,6 +77,7 @@ enum mem_class {
 	MEM_CLASS_STR,
 	MEM_CLASS_BIN,
 	MEM_CLASS_UUID,
+	MEM_CLASS_DATETIME,
 	mem_class_max,
 };
 
@@ -98,6 +100,8 @@ mem_type_class(enum mem_type type)
 		return MEM_CLASS_BOOL;
 	case MEM_TYPE_UUID:
 		return MEM_CLASS_UUID;
+	case MEM_TYPE_DATETIME:
+		return MEM_CLASS_DATETIME;
 	default:
 		break;
 	}
@@ -111,35 +115,89 @@ mem_is_field_compatible(const struct Mem *mem, enum field_type type)
 		return (field_ext_type[type] & (1U << MP_UUID)) != 0;
 	if (mem->type == MEM_TYPE_DEC)
 		return (field_ext_type[type] & (1U << MP_DECIMAL)) != 0;
+	if (mem->type == MEM_TYPE_DATETIME)
+		return (field_ext_type[type] & (1U << MP_DATETIME)) != 0;
 	enum mp_type mp_type = mem_mp_type(mem);
 	assert(mp_type != MP_EXT);
 	return field_mp_plain_type_is_compatible(type, mp_type, true);
 }
 
+int
+mem_snprintf(char *buf, uint32_t size, const struct Mem *mem)
+{
+	int res = -1;
+	switch (mem->type) {
+	case MEM_TYPE_NULL:
+		res = snprintf(buf, size, "NULL");
+		break;
+	case MEM_TYPE_STR:
+	case MEM_TYPE_BIN:
+		res = snprintf(buf, size, "%.*s", mem->n, mem->z);
+		break;
+	case MEM_TYPE_INT:
+		res = snprintf(buf, size, "%lld", mem->u.i);
+		break;
+	case MEM_TYPE_UINT:
+		res = snprintf(buf, size, "%llu", (unsigned long long)mem->u.u);
+		break;
+	case MEM_TYPE_DOUBLE: {
+		char str[BUF_SIZE];
+		sql_snprintf(BUF_SIZE, str, "%!.15g", mem->u.r);
+		res = snprintf(buf, size, "%s", str);
+		break;
+	}
+	case MEM_TYPE_DEC:
+		res = snprintf(buf, size, "%s", decimal_str(&mem->u.d));
+		break;
+	case MEM_TYPE_MAP:
+	case MEM_TYPE_ARRAY:
+		res = mp_snprint(buf, size, mem->z);
+		break;
+	case MEM_TYPE_UUID:
+		res = snprintf(buf, size, "%s", tt_uuid_str(&mem->u.uuid));
+		break;
+	case MEM_TYPE_DATETIME: {
+		char str[DT_TO_STRING_BUFSIZE];
+		datetime_to_string(&mem->u.dt, str, DT_TO_STRING_BUFSIZE);
+		res = snprintf(buf, size, "%s", str);
+		break;
+	}
+	case MEM_TYPE_BOOL:
+		res = snprintf(buf, size, mem->u.b ? "TRUE" : "FALSE");
+		break;
+	default:
+		unreachable();
+	}
+	assert(res >= 0);
+	return res;
+}
+
+char *
+mem_strdup(const struct Mem *mem)
+{
+	int size = mem_snprintf(NULL, 0, mem);
+	assert(size >= 0);
+	char *str = sqlDbMallocRawNN(sql_get(), size + 1);
+	if (str == NULL)
+		return NULL;
+	mem_snprintf(str, size + 1, mem);
+	return str;
+}
+
 const char *
 mem_str(const struct Mem *mem)
 {
-	char buf[STR_VALUE_MAX_LEN];
-	const char *type = mem_type_to_str(mem);
-	switch (mem->type) {
-	case MEM_TYPE_NULL:
+	if (mem->type == MEM_TYPE_NULL)
 		return "NULL";
-	case MEM_TYPE_STR:
+	const char *type = mem_type_to_str(mem);
+	if (mem->type == MEM_TYPE_STR) {
 		if (mem->n <= STR_VALUE_MAX_LEN)
 			return tt_sprintf("%s('%.*s')", type, mem->n, mem->z);
 		return tt_sprintf("%s('%.*s...)", type, STR_VALUE_MAX_LEN,
 				  mem->z);
-	case MEM_TYPE_INT:
-		return tt_sprintf("%s(%lld)", type, mem->u.i);
-	case MEM_TYPE_UINT:
-		return tt_sprintf("%s(%llu)", type, mem->u.u);
-	case MEM_TYPE_DOUBLE:
-		sql_snprintf(STR_VALUE_MAX_LEN, buf, "%!.15g", mem->u.r);
-		return tt_sprintf("%s(%s)", type, buf);
-	case MEM_TYPE_DEC:
-		decimal_to_string(&mem->u.d, buf);
-		return tt_sprintf("%s(%s)", type, buf);
-	case MEM_TYPE_BIN: {
+	}
+	char buf[STR_VALUE_MAX_LEN];
+	if (mem->type == MEM_TYPE_BIN) {
 		int len = MIN(mem->n, STR_VALUE_MAX_LEN / 2);
 		for (int i = 0; i < len; ++i) {
 			int n = (mem->z[i] & 0xF0) >> 4;
@@ -151,24 +209,10 @@ mem_str(const struct Mem *mem)
 			return tt_sprintf("%s(x'%.*s...)", type, len * 2, buf);
 		return tt_sprintf("%s(x'%.*s')", type, len * 2, buf);
 	}
-	case MEM_TYPE_MAP:
-	case MEM_TYPE_ARRAY: {
-		const char *str = mp_str(mem->z);
-		uint32_t len = strlen(str);
-		uint32_t minlen = MIN(STR_VALUE_MAX_LEN, len);
-		memcpy(buf, str, minlen);
-		if (len <= STR_VALUE_MAX_LEN)
-			return tt_sprintf("%s(%.*s)", type, minlen, buf);
-		return tt_sprintf("%s(%.*s...)", type, minlen, buf);
-	}
-	case MEM_TYPE_UUID:
-		tt_uuid_to_string(&mem->u.uuid, buf);
-		return tt_sprintf("%s('%s')", type, buf);
-	case MEM_TYPE_BOOL:
-		return tt_sprintf("%s(%s)", type, mem->u.b ? "TRUE" : "FALSE");
-	default:
-		return "unknown";
-	}
+	int size = mem_snprintf(buf, STR_VALUE_MAX_LEN, mem);
+	if (size <= STR_VALUE_MAX_LEN)
+		return tt_sprintf("%s(%s)", type, buf);
+	return tt_sprintf("%s(%.*s...)", type, STR_VALUE_MAX_LEN, buf);
 }
 
 static const char *
@@ -190,6 +234,12 @@ mem_type_class_to_str(const struct Mem *mem)
 		return "boolean";
 	case MEM_TYPE_UUID:
 		return "uuid";
+	case MEM_TYPE_ARRAY:
+		return "array";
+	case MEM_TYPE_MAP:
+		return "map";
+	case MEM_TYPE_DATETIME:
+		return "datetime";
 	default:
 		break;
 	}
@@ -207,7 +257,6 @@ mem_create(struct Mem *mem)
 	mem->szMalloc = 0;
 	mem->uTemp = 0;
 	mem->db = sql_get();
-	mem->xDel = NULL;
 #ifdef SQL_DEBUG
 	mem->pScopyFrom = NULL;
 	mem->pFiller = NULL;
@@ -217,19 +266,10 @@ mem_create(struct Mem *mem)
 static inline void
 mem_clear(struct Mem *mem)
 {
-	if ((mem->type & (MEM_TYPE_AGG | MEM_TYPE_FRAME)) != 0 ||
-	    (mem->flags & MEM_Dyn) != 0) {
-		if (mem->type == MEM_TYPE_AGG)
-			sql_vdbemem_finalize(mem, mem->u.func);
-		assert(mem->type != MEM_TYPE_AGG);
-		if ((mem->flags & MEM_Dyn) != 0) {
-			assert(mem->xDel != SQL_DYNAMIC && mem->xDel != NULL);
-			mem->xDel((void *)mem->z);
-		} else if (mem->type == MEM_TYPE_FRAME) {
-			struct VdbeFrame *frame = mem->u.pFrame;
-			frame->pParent = frame->v->pDelFrame;
-			frame->v->pDelFrame = frame;
-		}
+	if (mem->type == MEM_TYPE_FRAME) {
+		struct VdbeFrame *frame = mem->u.pFrame;
+		frame->pParent = frame->v->pDelFrame;
+		frame->v->pDelFrame = frame;
 	}
 	mem->type = MEM_TYPE_NULL;
 	mem->flags = 0;
@@ -310,6 +350,15 @@ mem_set_uuid(struct Mem *mem, const struct tt_uuid *uuid)
 	assert(mem->flags == 0);
 }
 
+void
+mem_set_datetime(struct Mem *mem, const struct datetime *dt)
+{
+	mem_clear(mem);
+	mem->u.dt = *dt;
+	mem->type = MEM_TYPE_DATETIME;
+	assert(mem->flags == 0);
+}
+
 static inline void
 set_str_const(struct Mem *mem, char *value, uint32_t len, int alloc_type)
 {
@@ -324,21 +373,14 @@ set_str_const(struct Mem *mem, char *value, uint32_t len, int alloc_type)
 static inline void
 set_str_dynamic(struct Mem *mem, char *value, uint32_t len, int alloc_type)
 {
-	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
 	assert(mem->szMalloc == 0 || value != mem->zMalloc);
-	assert(alloc_type == MEM_Dyn || alloc_type == 0);
 	mem_destroy(mem);
 	mem->z = value;
 	mem->n = len;
 	mem->type = MEM_TYPE_STR;
 	mem->flags = alloc_type;
-	if (alloc_type == MEM_Dyn) {
-		mem->xDel = sql_free;
-	} else {
-		mem->xDel = NULL;
-		mem->zMalloc = mem->z;
-		mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
-	}
+	mem->zMalloc = mem->z;
+	mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
 }
 
 void
@@ -354,12 +396,6 @@ mem_set_str_static(struct Mem *mem, char *value, uint32_t len)
 }
 
 void
-mem_set_str_dynamic(struct Mem *mem, char *value, uint32_t len)
-{
-	set_str_dynamic(mem, value, len, MEM_Dyn);
-}
-
-void
 mem_set_str_allocated(struct Mem *mem, char *value, uint32_t len)
 {
 	set_str_dynamic(mem, value, len, 0);
@@ -369,50 +405,46 @@ void
 mem_set_str0_ephemeral(struct Mem *mem, char *value)
 {
 	set_str_const(mem, value, strlen(value), MEM_Ephem);
-	mem->flags |= MEM_Term;
 }
 
 void
 mem_set_str0_static(struct Mem *mem, char *value)
 {
 	set_str_const(mem, value, strlen(value), MEM_Static);
-	mem->flags |= MEM_Term;
-}
-
-void
-mem_set_str0_dynamic(struct Mem *mem, char *value)
-{
-	set_str_dynamic(mem, value, strlen(value), MEM_Dyn);
-	mem->flags |= MEM_Term;
 }
 
 void
 mem_set_str0_allocated(struct Mem *mem, char *value)
 {
 	set_str_dynamic(mem, value, strlen(value), 0);
-	mem->flags |= MEM_Term;
+}
+
+static int
+mem_copy_bytes(struct Mem *mem, const char *value, uint32_t size,
+	       enum mem_type type)
+{
+	if (mem_is_bytes(mem) && mem->z == value) {
+		/* Own value, but might be ephemeral. Make it own if so. */
+		if (sqlVdbeMemGrow(mem, size, 1) != 0)
+			return -1;
+		mem->type = type;
+		mem->flags = 0;
+		return 0;
+	}
+	mem_clear(mem);
+	if (sqlVdbeMemGrow(mem, size, 0) != 0)
+		return -1;
+	memcpy(mem->z, value, size);
+	mem->n = size;
+	mem->type = type;
+	assert(mem->flags == 0);
+	return 0;
 }
 
 int
 mem_copy_str(struct Mem *mem, const char *value, uint32_t len)
 {
-	if (((mem->type & (MEM_TYPE_STR | MEM_TYPE_BIN)) != 0) &&
-	    mem->z == value) {
-		/* Own value, but might be ephemeral. Make it own if so. */
-		if (sqlVdbeMemGrow(mem, len, 1) != 0)
-			return -1;
-		mem->type = MEM_TYPE_STR;
-		mem->flags = 0;
-		return 0;
-	}
-	mem_clear(mem);
-	if (sqlVdbeMemGrow(mem, len, 0) != 0)
-		return -1;
-	memcpy(mem->z, value, len);
-	mem->n = len;
-	mem->type = MEM_TYPE_STR;
-	assert(mem->flags == 0);
-	return 0;
+	return mem_copy_bytes(mem, value, len, MEM_TYPE_STR);
 }
 
 int
@@ -422,7 +454,6 @@ mem_copy_str0(struct Mem *mem, const char *value)
 	if (mem_copy_str(mem, value, len + 1) != 0)
 		return -1;
 	mem->n = len;
-	mem->flags |= MEM_Term;
 	return 0;
 }
 
@@ -440,21 +471,14 @@ set_bin_const(struct Mem *mem, char *value, uint32_t size, int alloc_type)
 static inline void
 set_bin_dynamic(struct Mem *mem, char *value, uint32_t size, int alloc_type)
 {
-	assert((mem->flags & MEM_Dyn) == 0 || value != mem->z);
 	assert(mem->szMalloc == 0 || value != mem->zMalloc);
-	assert(alloc_type == MEM_Dyn || alloc_type == 0);
 	mem_destroy(mem);
 	mem->z = value;
 	mem->n = size;
 	mem->type = MEM_TYPE_BIN;
 	mem->flags = alloc_type;
-	if (alloc_type == MEM_Dyn) {
-		mem->xDel = sql_free;
-	} else {
-		mem->xDel = NULL;
-		mem->zMalloc = mem->z;
-		mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
-	}
+	mem->zMalloc = mem->z;
+	mem->szMalloc = sqlDbMallocSize(mem->db, mem->zMalloc);
 }
 
 void
@@ -470,12 +494,6 @@ mem_set_bin_static(struct Mem *mem, char *value, uint32_t size)
 }
 
 void
-mem_set_bin_dynamic(struct Mem *mem, char *value, uint32_t size)
-{
-	set_bin_dynamic(mem, value, size, MEM_Dyn);
-}
-
-void
 mem_set_bin_allocated(struct Mem *mem, char *value, uint32_t size)
 {
 	set_bin_dynamic(mem, value, size, 0);
@@ -484,36 +502,7 @@ mem_set_bin_allocated(struct Mem *mem, char *value, uint32_t size)
 int
 mem_copy_bin(struct Mem *mem, const char *value, uint32_t size)
 {
-	if (((mem->type & (MEM_TYPE_STR | MEM_TYPE_BIN)) != 0) &&
-	    mem->z == value) {
-		/* Own value, but might be ephemeral. Make it own if so. */
-		if (sqlVdbeMemGrow(mem, size, 1) != 0)
-			return -1;
-		mem->type = MEM_TYPE_BIN;
-		mem->flags = 0;
-		return 0;
-	}
-	mem_clear(mem);
-	if (sqlVdbeMemGrow(mem, size, 0) != 0)
-		return -1;
-	memcpy(mem->z, value, size);
-	mem->n = size;
-	mem->type = MEM_TYPE_BIN;
-	assert(mem->flags == 0);
-	return 0;
-}
-
-void
-mem_set_zerobin(struct Mem *mem, int n)
-{
-	mem_destroy(mem);
-	if (n < 0)
-		n = 0;
-	mem->u.nZero = n;
-	mem->z = NULL;
-	mem->n = 0;
-	mem->type = MEM_TYPE_BIN;
-	mem->flags = MEM_Zero;
+	return mem_copy_bytes(mem, value, size, MEM_TYPE_BIN);
 }
 
 static inline void
@@ -542,17 +531,16 @@ mem_set_map_static(struct Mem *mem, char *value, uint32_t size)
 }
 
 void
-mem_set_map_dynamic(struct Mem *mem, char *value, uint32_t size)
-{
-	assert(mp_typeof(*value) == MP_MAP);
-	set_msgpack_value(mem, value, size, MEM_Dyn, MEM_TYPE_MAP);
-}
-
-void
 mem_set_map_allocated(struct Mem *mem, char *value, uint32_t size)
 {
 	assert(mp_typeof(*value) == MP_MAP);
 	set_msgpack_value(mem, value, size, 0, MEM_TYPE_MAP);
+}
+
+int
+mem_copy_map(struct Mem *mem, const char *value, uint32_t size)
+{
+	return mem_copy_bytes(mem, value, size, MEM_TYPE_MAP);
 }
 
 void
@@ -570,17 +558,16 @@ mem_set_array_static(struct Mem *mem, char *value, uint32_t size)
 }
 
 void
-mem_set_array_dynamic(struct Mem *mem, char *value, uint32_t size)
-{
-	assert(mp_typeof(*value) == MP_ARRAY);
-	set_msgpack_value(mem, value, size, MEM_Dyn, MEM_TYPE_ARRAY);
-}
-
-void
 mem_set_array_allocated(struct Mem *mem, char *value, uint32_t size)
 {
 	assert(mp_typeof(*value) == MP_ARRAY);
 	set_msgpack_value(mem, value, size, 0, MEM_TYPE_ARRAY);
+}
+
+int
+mem_copy_array(struct Mem *mem, const char *value, uint32_t size)
+{
+	return mem_copy_bytes(mem, value, size, MEM_TYPE_ARRAY);
 }
 
 void
@@ -607,22 +594,6 @@ mem_set_frame(struct Mem *mem, struct VdbeFrame *frame)
 	mem->type = MEM_TYPE_FRAME;
 	assert(mem->flags == 0);
 	mem->u.pFrame = frame;
-}
-
-int
-mem_set_agg(struct Mem *mem, struct func *func, int size)
-{
-	mem_clear(mem);
-	if (size <= 0)
-		return 0;
-	if (sqlVdbeMemGrow(mem, size, 0) != 0)
-		return -1;
-	memset(mem->z, 0, size);
-	mem->n = size;
-	mem->type = MEM_TYPE_AGG;
-	assert(mem->flags == 0);
-	mem->u.func = func;
-	return 0;
 }
 
 void
@@ -695,7 +666,7 @@ uint_to_double_precise(struct Mem *mem)
 	assert(mem->type == MEM_TYPE_UINT);
 	double d;
 	d = (double)mem->u.u;
-	if (mem->u.u != (uint64_t)d)
+	if (d == (double)UINT64_MAX || mem->u.u != (uint64_t)d)
 		return -1;
 	mem->u.r = d;
 	mem->flags = 0;
@@ -737,22 +708,10 @@ int_to_str0(struct Mem *mem)
 	assert((mem->type & (MEM_TYPE_INT | MEM_TYPE_UINT)) != 0);
 	const char *str;
 	if (mem->type == MEM_TYPE_UINT)
-		str = tt_sprintf("%llu", mem->u.u);
+		str = tt_sprintf("%llu", (unsigned long long)mem->u.u);
 	else
-		str = tt_sprintf("%lld", mem->u.i);
+		str = tt_sprintf("%lld", (long long)mem->u.i);
 	return mem_copy_str0(mem, str);
-}
-
-static inline int
-str_to_str0(struct Mem *mem)
-{
-	assert(mem->type == MEM_TYPE_STR);
-	if (sqlVdbeMemGrow(mem, mem->n + 1, 1) != 0)
-		return -1;
-	mem->z[mem->n] = '\0';
-	mem->flags |= MEM_Term;
-	mem->flags &= ~MEM_Scalar;
-	return 0;
 }
 
 static inline int
@@ -760,7 +719,7 @@ str_to_bin(struct Mem *mem)
 {
 	assert(mem->type == MEM_TYPE_STR);
 	mem->type = MEM_TYPE_BIN;
-	mem->flags &= ~(MEM_Term | MEM_Scalar);
+	mem->flags &= ~(MEM_Scalar | MEM_Any);
 	return 0;
 }
 
@@ -806,24 +765,8 @@ static inline int
 bin_to_str(struct Mem *mem)
 {
 	assert(mem->type == MEM_TYPE_BIN);
-	if (ExpandBlob(mem) != 0)
-		return -1;
 	mem->type = MEM_TYPE_STR;
-	mem->flags &= ~MEM_Scalar;
-	return 0;
-}
-
-static inline int
-bin_to_str0(struct Mem *mem)
-{
-	assert(mem->type == MEM_TYPE_BIN);
-	if (ExpandBlob(mem) != 0)
-		return -1;
-	if (sqlVdbeMemGrow(mem, mem->n + 1, 1) != 0)
-		return -1;
-	mem->z[mem->n] = '\0';
-	mem->type = MEM_TYPE_STR;
-	mem->flags = MEM_Term;
+	mem->flags &= ~(MEM_Scalar | MEM_Any);
 	return 0;
 }
 
@@ -831,8 +774,6 @@ static inline int
 bin_to_uuid(struct Mem *mem)
 {
 	assert(mem->type == MEM_TYPE_BIN);
-	if (ExpandBlob(mem) != 0)
-		return -1;
 	if (mem->n != UUID_LEN ||
 	    tt_uuid_validate((struct tt_uuid *)mem->z) != 0)
 		return -1;
@@ -1094,7 +1035,7 @@ double_to_str0(struct Mem *mem)
 	sql_snprintf(BUF_SIZE, mem->z, "%!.15g", mem->u.r);
 	mem->n = strlen(mem->z);
 	mem->type = MEM_TYPE_STR;
-	mem->flags = MEM_Term;
+	mem->flags = 0;
 	return 0;
 }
 
@@ -1106,9 +1047,9 @@ dec_to_int(struct Mem *mem)
 		int64_t i;
 		if (decimal_to_int64(&mem->u.d, &i) == NULL)
 			return -1;
-		assert(i < 0);
+		assert(i <= 0);
 		mem->u.i = i;
-		mem->type = MEM_TYPE_INT;
+		mem->type = i == 0 ? MEM_TYPE_UINT : MEM_TYPE_INT;
 		mem->flags = 0;
 		return 0;
 	}
@@ -1134,21 +1075,23 @@ static inline int
 dec_to_int_forced(struct Mem *mem)
 {
 	assert(mem->type == MEM_TYPE_DEC);
+	bool is_dec_int = decimal_is_int(&mem->u.d);
 	if (decimal_is_neg(&mem->u.d)) {
 		int64_t i;
-		mem->type = MEM_TYPE_INT;
 		mem->flags = 0;
 		if (decimal_to_int64(&mem->u.d, &i) == NULL) {
 			mem->u.i = INT64_MIN;
+			mem->type = MEM_TYPE_INT;
 			return -1;
 		}
-		assert(i < 0);
+		assert(i <= 0);
 		mem->u.i = i;
+		mem->type = i == 0 ? MEM_TYPE_UINT : MEM_TYPE_INT;
 		/*
 		 * Decimal is floored when cast to int, which means that after
 		 * cast it becomes bigger if it was not integer.
 		 */
-		return decimal_is_int(&mem->u.d) ? 0 : -1;
+		return is_dec_int ? 0 : -1;
 	}
 	uint64_t u;
 	mem->type = MEM_TYPE_UINT;
@@ -1162,7 +1105,7 @@ dec_to_int_forced(struct Mem *mem)
 	 * Decimal is floored when cast to uint, which means that after cast it
 	 * becomes less if it was not integer.
 	 */
-	return decimal_is_int(&mem->u.d) ? 0 : 1;
+	return is_dec_int ? 0 : 1;
 }
 
 static inline int
@@ -1275,28 +1218,24 @@ bool_to_str0(struct Mem *mem)
 }
 
 static inline int
-array_to_str0(struct Mem *mem)
-{
-	assert(mem->type == MEM_TYPE_ARRAY);
-	const char *str = mp_str(mem->z);
-	return mem_copy_str0(mem, str);
-}
-
-static inline int
-map_to_str0(struct Mem *mem)
-{
-	assert(mem->type == MEM_TYPE_MAP);
-	const char *str = mp_str(mem->z);
-	return mem_copy_str0(mem, str);
-}
-
-static inline int
 uuid_to_str0(struct Mem *mem)
 {
 	assert(mem->type == MEM_TYPE_UUID);
 	char buf[UUID_STR_LEN + 1];
 	tt_uuid_to_string(&mem->u.uuid, &buf[0]);
 	return mem_copy_str0(mem, &buf[0]);
+}
+
+/** Convert MEM from DATETIME to STRING. */
+static inline int
+datetime_to_str0(struct Mem *mem)
+{
+	assert(mem->type == MEM_TYPE_DATETIME);
+	char buf[DT_TO_STRING_BUFSIZE];
+	uint32_t len = datetime_to_string(&mem->u.dt, buf,
+					  DT_TO_STRING_BUFSIZE);
+	assert(len == strlen(buf));
+	return mem_copy_str(mem, buf, len);
 }
 
 static inline int
@@ -1336,7 +1275,7 @@ mem_to_int_precise(struct Mem *mem)
 	if (mem->type == MEM_TYPE_DOUBLE)
 		return double_to_int_precise(mem);
 	if (mem->type == MEM_TYPE_DEC)
-		return dec_to_int(mem);
+		return dec_to_int_precise(mem);
 	return -1;
 }
 
@@ -1375,45 +1314,12 @@ mem_to_number(struct Mem *mem)
 }
 
 int
-mem_to_str0(struct Mem *mem)
-{
-	assert(mem->type < MEM_TYPE_INVALID);
-	switch (mem->type) {
-	case MEM_TYPE_STR:
-		if ((mem->flags & MEM_Term) != 0) {
-			mem->flags &= ~MEM_Scalar;
-			return 0;
-		}
-		return str_to_str0(mem);
-	case MEM_TYPE_INT:
-	case MEM_TYPE_UINT:
-		return int_to_str0(mem);
-	case MEM_TYPE_DOUBLE:
-		return double_to_str0(mem);
-	case MEM_TYPE_BOOL:
-		return bool_to_str0(mem);
-	case MEM_TYPE_BIN:
-		return bin_to_str0(mem);
-	case MEM_TYPE_MAP:
-		return map_to_str0(mem);
-	case MEM_TYPE_ARRAY:
-		return array_to_str0(mem);
-	case MEM_TYPE_UUID:
-		return uuid_to_str0(mem);
-	case MEM_TYPE_DEC:
-		return dec_to_str0(mem);
-	default:
-		return -1;
-	}
-}
-
-int
 mem_to_str(struct Mem *mem)
 {
 	assert(mem->type < MEM_TYPE_INVALID);
 	switch (mem->type) {
 	case MEM_TYPE_STR:
-		mem->flags &= ~MEM_Scalar;
+		mem->flags &= ~(MEM_Scalar | MEM_Any);
 		return 0;
 	case MEM_TYPE_INT:
 	case MEM_TYPE_UINT:
@@ -1424,14 +1330,12 @@ mem_to_str(struct Mem *mem)
 		return bool_to_str0(mem);
 	case MEM_TYPE_BIN:
 		return bin_to_str(mem);
-	case MEM_TYPE_MAP:
-		return map_to_str0(mem);
-	case MEM_TYPE_ARRAY:
-		return array_to_str0(mem);
 	case MEM_TYPE_UUID:
 		return uuid_to_str0(mem);
 	case MEM_TYPE_DEC:
 		return dec_to_str0(mem);
+	case MEM_TYPE_DATETIME:
+		return datetime_to_str0(mem);
 	default:
 		return -1;
 	}
@@ -1476,8 +1380,8 @@ mem_cast_explicit(struct Mem *mem, enum field_type type)
 	case FIELD_TYPE_VARBINARY:
 		if (mem->type == MEM_TYPE_STR)
 			return str_to_bin(mem);
-		if (mem_is_bytes(mem)) {
-			mem->flags &= ~MEM_Scalar;
+		if (mem_is_bin(mem)) {
+			mem->flags &= ~(MEM_Scalar | MEM_Any);
 			return 0;
 		}
 		if (mem->type == MEM_TYPE_UUID)
@@ -1511,11 +1415,30 @@ mem_cast_explicit(struct Mem *mem, enum field_type type)
 		if (mem->type == MEM_TYPE_BIN)
 			return bin_to_uuid(mem);
 		return -1;
+	case FIELD_TYPE_DATETIME:
+		if (mem->type != MEM_TYPE_DATETIME)
+			return -1;
+		mem->flags = 0;
+		return 0;
+	case FIELD_TYPE_ARRAY:
+		if (mem->type != MEM_TYPE_ARRAY)
+			return -1;
+		mem->flags &= ~MEM_Any;
+		return 0;
+	case FIELD_TYPE_MAP:
+		if (mem->type != MEM_TYPE_MAP)
+			return -1;
+		mem->flags &= ~MEM_Any;
+		return 0;
 	case FIELD_TYPE_SCALAR:
 		if ((mem->type & (MEM_TYPE_MAP | MEM_TYPE_ARRAY)) != 0)
 			return -1;
 		mem->flags |= MEM_Scalar;
-		mem->flags &= ~MEM_Number;
+		mem->flags &= ~(MEM_Number | MEM_Any);
+		return 0;
+	case FIELD_TYPE_ANY:
+		mem->flags |= MEM_Any;
+		mem->flags &= ~(MEM_Number | MEM_Scalar);
 		return 0;
 	default:
 		break;
@@ -1526,13 +1449,23 @@ mem_cast_explicit(struct Mem *mem, enum field_type type)
 int
 mem_cast_implicit(struct Mem *mem, enum field_type type)
 {
-	if (mem->type == MEM_TYPE_NULL || type == FIELD_TYPE_ANY)
+	if (mem->type == MEM_TYPE_NULL || type == field_type_MAX)
 		return 0;
-	if ((mem->flags & MEM_Scalar) != 0 && type != FIELD_TYPE_SCALAR)
-		return -1;
-	if ((mem->flags & MEM_Number) != 0 && type != FIELD_TYPE_SCALAR &&
-	    type != FIELD_TYPE_NUMBER)
-		return -1;
+	if (mem_is_metatype(mem) && type != FIELD_TYPE_ANY) {
+		if ((mem->flags & MEM_Number) != 0) {
+			if (type != FIELD_TYPE_NUMBER &&
+			    type != FIELD_TYPE_SCALAR &&
+			    type != FIELD_TYPE_ANY)
+				return -1;
+		} else if ((mem->flags & MEM_Scalar) != 0) {
+			if (type != FIELD_TYPE_SCALAR &&
+			    type != FIELD_TYPE_ANY)
+				return -1;
+		} else {
+			if (type != FIELD_TYPE_ANY)
+				return -1;
+		}
+	}
 	switch (type) {
 	case FIELD_TYPE_UNSIGNED:
 		if (mem->type == MEM_TYPE_UINT) {
@@ -1546,7 +1479,7 @@ mem_cast_implicit(struct Mem *mem, enum field_type type)
 		return -1;
 	case FIELD_TYPE_STRING:
 		if (mem->type == MEM_TYPE_STR) {
-			mem->flags &= ~MEM_Scalar;
+			mem->flags &= ~(MEM_Scalar | MEM_Any);
 			return 0;
 		}
 		return -1;
@@ -1579,9 +1512,8 @@ mem_cast_implicit(struct Mem *mem, enum field_type type)
 		}
 		return -1;
 	case FIELD_TYPE_VARBINARY:
-		if ((mem->type & (MEM_TYPE_BIN | MEM_TYPE_MAP |
-				  MEM_TYPE_ARRAY)) != 0) {
-			mem->flags &= ~MEM_Scalar;
+		if (mem->type == MEM_TYPE_BIN) {
+			mem->flags &= ~(MEM_Scalar | MEM_Any);
 			return 0;
 		}
 		return -1;
@@ -1616,14 +1548,21 @@ mem_cast_implicit(struct Mem *mem, enum field_type type)
 		if ((mem->type & (MEM_TYPE_MAP | MEM_TYPE_ARRAY)) != 0)
 			return -1;
 		mem->flags |= MEM_Scalar;
-		mem->flags &= ~MEM_Number;
+		mem->flags &= ~(MEM_Number | MEM_Any);
 		return 0;
 	case FIELD_TYPE_UUID:
 		if (mem->type != MEM_TYPE_UUID)
 			return -1;
 		mem->flags = 0;
 		return 0;
+	case FIELD_TYPE_DATETIME:
+		if (mem->type != MEM_TYPE_DATETIME)
+			return -1;
+		mem->flags = 0;
+		return 0;
 	case FIELD_TYPE_ANY:
+		mem->flags |= MEM_Any;
+		mem->flags &= ~(MEM_Number | MEM_Scalar);
 		return 0;
 	default:
 		break;
@@ -1854,22 +1793,13 @@ mem_get_bool(const struct Mem *mem, bool *b)
 }
 
 int
-mem_get_str0(const struct Mem *mem, const char **s)
-{
-	if (mem->type != MEM_TYPE_STR || (mem->flags & MEM_Term) == 0)
-		return -1;
-	*s = mem->z;
-	return 0;
-}
-
-int
 mem_get_bin(const struct Mem *mem, const char **s)
 {
 	if (mem->type == MEM_TYPE_STR) {
 		*s = mem->n > 0 ? mem->z : NULL;
 		return 0;
 	}
-	if (mem->type != MEM_TYPE_BIN || (mem->flags & MEM_Zero) != 0)
+	if (mem->type != MEM_TYPE_BIN)
 		return -1;
 	*s = mem->z;
 	return 0;
@@ -1880,20 +1810,7 @@ mem_len(const struct Mem *mem, uint32_t *len)
 {
 	if (!mem_is_bytes(mem))
 		return -1;
-	assert((mem->flags & MEM_Zero) == 0 || mem->type == MEM_TYPE_BIN);
-	if ((mem->flags & MEM_Zero) != 0)
-		*len = mem->n + mem->u.nZero;
-	else
-		*len = mem->n;
-	return 0;
-}
-
-int
-mem_get_agg(const struct Mem *mem, void **accum)
-{
-	if (mem->type != MEM_TYPE_AGG)
-		return -1;
-	*accum = mem->z;
+	*len = mem->n;
 	return 0;
 }
 
@@ -1910,9 +1827,6 @@ mem_copy(struct Mem *to, const struct Mem *from)
 		return 0;
 	if ((to->flags & MEM_Static) != 0)
 		return 0;
-	assert((to->flags & MEM_Zero) == 0 || to->type == MEM_TYPE_BIN);
-	if ((to->flags & MEM_Zero) != 0)
-		return sqlVdbeMemExpandBlob(to);
 	to->zMalloc = sqlDbRealloc(to->db, to->zMalloc, MAX(32, to->n));
 	assert(to->zMalloc != NULL || sql_get()->mallocFailed != 0);
 	if (to->zMalloc == NULL)
@@ -1920,7 +1834,7 @@ mem_copy(struct Mem *to, const struct Mem *from)
 	to->szMalloc = sqlDbMallocSize(to->db, to->zMalloc);
 	memcpy(to->zMalloc, to->z, to->n);
 	to->z = to->zMalloc;
-	to->flags &= MEM_Term;
+	to->flags = 0;
 	return 0;
 }
 
@@ -1937,7 +1851,7 @@ mem_copy_as_ephemeral(struct Mem *to, const struct Mem *from)
 		return;
 	if ((to->flags & (MEM_Static | MEM_Ephem)) != 0)
 		return;
-	to->flags &= MEM_Term | MEM_Zero;
+	to->flags = 0;
 	to->flags |= MEM_Ephem;
 	return;
 }
@@ -1954,7 +1868,28 @@ mem_move(struct Mem *to, struct Mem *from)
 }
 
 int
-mem_concat(struct Mem *a, struct Mem *b, struct Mem *result)
+mem_append(struct Mem *mem, const char *value, uint32_t len)
+{
+	assert((mem->type & (MEM_TYPE_BIN | MEM_TYPE_STR)) != 0);
+	if (len == 0)
+		return 0;
+	int new_size = mem->n + len;
+	if (((mem->flags & (MEM_Static | MEM_Ephem)) != 0) ||
+	    mem->szMalloc < new_size) {
+		/*
+		 * Force exponential buffer size growth to avoid having to call
+		 * this routine too often.
+		 */
+		if (sqlVdbeMemGrow(mem, new_size + mem->n, 1) != 0)
+			return -1;
+	}
+	memcpy(&mem->z[mem->n], value, len);
+	mem->n = new_size;
+	return 0;
+}
+
+int
+mem_concat(const struct Mem *a, const struct Mem *b, struct Mem *result)
 {
 	if (mem_is_any_null(a, b)) {
 		mem_set_null(result);
@@ -1980,9 +1915,6 @@ mem_concat(struct Mem *a, struct Mem *b, struct Mem *result)
 			 mem_type_to_str(a), mem_str(b));
 		return -1;
 	}
-
-	if (ExpandBlob(a) != 0 || ExpandBlob(b) != 0)
-		return -1;
 
 	uint32_t size = a->n + b->n;
 	if ((int)size > sql_get()->aLimit[SQL_LIMIT_LENGTH]) {
@@ -2330,37 +2262,8 @@ static int
 mem_cmp_bin(const struct Mem *a, const struct Mem *b)
 {
 	assert((a->type & b->type & MEM_TYPE_BIN) != 0);
-	int an = a->n;
-	int bn = b->n;
-	int minlen = MIN(an, bn);
-
-	/*
-	 * It is possible to have a Blob value that has some non-zero content
-	 * followed by zero content.  But that only comes up for Blobs formed
-	 * by the OP_MakeRecord opcode, and such Blobs never get passed into
-	 * mem_compare().
-	 */
-	assert((a->flags & MEM_Zero) == 0 || an == 0);
-	assert((b->flags & MEM_Zero) == 0 || bn == 0);
-
-	if ((a->flags & b->flags & MEM_Zero) != 0)
-		return a->u.nZero - b->u.nZero;
-	if ((a->flags & MEM_Zero) != 0) {
-		for (int i = 0; i < minlen; ++i) {
-			if (b->z[i] != 0)
-				return -1;
-		}
-		return a->u.nZero - bn;
-	}
-	if ((b->flags & MEM_Zero) != 0) {
-		for (int i = 0; i < minlen; ++i) {
-			if (a->z[i] != 0)
-				return 1;
-		}
-		return b->u.nZero - an;
-	}
-	int res = memcmp(a->z, b->z, minlen);
-	return res != 0 ? res : an - bn;
+	int res = memcmp(a->z, b->z, MIN(a->n, b->n));
+	return res != 0 ? res : a->n - b->n;
 }
 
 static int
@@ -2486,6 +2389,14 @@ mem_cmp_uuid(const struct Mem *a, const struct Mem *b)
 	return memcmp(&a->u.uuid, &b->u.uuid, UUID_LEN);
 }
 
+/** Compare two MEMs with DATETIME. */
+static int
+mem_cmp_datetime(const struct Mem *a, const struct Mem *b)
+{
+	assert((a->type & b->type & MEM_TYPE_DATETIME) != 0);
+	return datetime_compare(&a->u.dt, &b->u.dt);
+}
+
 int
 mem_cmp_scalar(const struct Mem *a, const struct Mem *b,
 	       const struct coll *coll)
@@ -2507,6 +2418,8 @@ mem_cmp_scalar(const struct Mem *a, const struct Mem *b,
 		return mem_cmp_bin(a, b);
 	case MEM_CLASS_UUID:
 		return mem_cmp_uuid(a, b);
+	case MEM_CLASS_DATETIME:
+		return mem_cmp_datetime(a, b);
 	default:
 		unreachable();
 	}
@@ -2577,6 +2490,14 @@ mem_cmp_msgpack(const struct Mem *a, const char **b, int *result,
 			if (decimal_unpack(b, len, &mem.u.d) == 0)
 				return -1;
 			break;
+		} else if (type == MP_DATETIME) {
+			mem.type = MEM_TYPE_DATETIME;
+			if (datetime_unpack(b, len, &mem.u.dt) == 0) {
+				diag_set(ClientError, ER_INVALID_MSGPACK,
+					 "Invalid MP_DATETIME MsgPack format");
+				return -1;
+			}
+			break;
 		}
 		*b += len;
 		mem.type = MEM_TYPE_BIN;
@@ -2604,6 +2525,12 @@ mem_cmp(const struct Mem *a, const struct Mem *b, int *result,
 			*result = 1;
 		return 0;
 	}
+	if (((a->flags | b->flags) & MEM_Any) != 0 ||
+	    ((a->type | b->type) & (MEM_TYPE_ARRAY | MEM_TYPE_MAP)) != 0) {
+		diag_set(ClientError, ER_SQL_TYPE_MISMATCH, mem_str(a),
+			 "comparable type");
+		return -1;
+	}
 	if (((a->flags | b->flags) & MEM_Scalar) != 0) {
 		*result = mem_cmp_scalar(a, b, coll);
 		return 0;
@@ -2629,6 +2556,9 @@ mem_cmp(const struct Mem *a, const struct Mem *b, int *result,
 	case MEM_CLASS_UUID:
 		*result = mem_cmp_uuid(a, b);
 		break;
+	case MEM_CLASS_DATETIME:
+		*result = mem_cmp_datetime(a, b);
+		break;
 	default:
 		unreachable();
 	}
@@ -2639,6 +2569,8 @@ char *
 mem_type_to_str(const struct Mem *p)
 {
 	assert(p != NULL);
+	if ((p->flags & MEM_Any) != 0)
+		return "any";
 	if ((p->flags & MEM_Scalar) != 0)
 		return "scalar";
 	if ((p->flags & MEM_Number) != 0)
@@ -2665,6 +2597,8 @@ mem_type_to_str(const struct Mem *p)
 		return "uuid";
 	case MEM_TYPE_DEC:
 		return "decimal";
+	case MEM_TYPE_DATETIME:
+		return "datetime";
 	default:
 		unreachable();
 	}
@@ -2695,22 +2629,12 @@ mem_mp_type(const struct Mem *mem)
 		return MP_DOUBLE;
 	case MEM_TYPE_DEC:
 	case MEM_TYPE_UUID:
+	case MEM_TYPE_DATETIME:
 		return MP_EXT;
 	default:
 		unreachable();
 	}
 	return MP_NIL;
-}
-
-/* EVIDENCE-OF: R-12793-43283 Every value in sql has one of five
- * fundamental datatypes: 64-bit signed integer 64-bit IEEE floating
- * point number string BLOB NULL
- */
-enum mp_type
-sql_value_type(sql_value *pVal)
-{
-	struct Mem *mem = (struct Mem *) pVal;
-	return mem_mp_type(mem);
 }
 
 #ifdef SQL_DEBUG
@@ -2723,18 +2647,6 @@ sql_value_type(sql_value *pVal)
 int
 sqlVdbeCheckMemInvariants(Mem * p)
 {
-	/* If MEM_Dyn is set then Mem.xDel!=0.
-	 * Mem.xDel is might not be initialized if MEM_Dyn is clear.
-	 */
-	assert((p->flags & MEM_Dyn) == 0 || p->xDel != 0);
-
-	/* MEM_Dyn may only be set if Mem.szMalloc==0.  In this way we
-	 * ensure that if Mem.szMalloc>0 then it is safe to do
-	 * Mem.z = Mem.zMalloc without having to check Mem.flags&MEM_Dyn.
-	 * That saves a few cycles in inner loops.
-	 */
-	assert((p->flags & MEM_Dyn) == 0 || p->szMalloc == 0);
-
 	/* The szMalloc field holds the correct memory allocation size */
 	assert(p->szMalloc == 0 ||
 	       p->szMalloc == sqlDbMallocSize(p->db, p->zMalloc));
@@ -2749,168 +2661,12 @@ sqlVdbeCheckMemInvariants(Mem * p)
 	 */
 	if ((p->type & (MEM_TYPE_STR | MEM_TYPE_BIN)) != 0 && p->n > 0) {
 		assert(((p->szMalloc > 0 && p->z == p->zMalloc) ? 1 : 0) +
-		       ((p->flags & MEM_Dyn) != 0 ? 1 : 0) +
 		       ((p->flags & MEM_Ephem) != 0 ? 1 : 0) +
 		       ((p->flags & MEM_Static) != 0 ? 1 : 0) == 1);
 	}
 	return 1;
 }
-
-/*
- * Write a nice string representation of the contents of cell pMem
- * into buffer zBuf, length nBuf.
- */
-void
-sqlVdbeMemPrettyPrint(Mem *pMem, char *zBuf)
-{
-	char *zCsr = zBuf;
-	int f = pMem->flags;
-
-	if (pMem->type == MEM_TYPE_BIN) {
-		int i;
-		char c;
-		if (f & MEM_Dyn) {
-			c = 'z';
-			assert((f & (MEM_Static|MEM_Ephem))==0);
-		} else if (f & MEM_Static) {
-			c = 't';
-			assert((f & (MEM_Dyn|MEM_Ephem))==0);
-		} else if (f & MEM_Ephem) {
-			c = 'e';
-			assert((f & (MEM_Static|MEM_Dyn))==0);
-		} else {
-			c = 's';
-		}
-
-		sql_snprintf(100, zCsr, "%c", c);
-		zCsr += sqlStrlen30(zCsr);
-		sql_snprintf(100, zCsr, "%d[", pMem->n);
-		zCsr += sqlStrlen30(zCsr);
-		for(i=0; i<16 && i<pMem->n; i++) {
-			sql_snprintf(100, zCsr, "%02X", ((int)pMem->z[i] & 0xFF));
-			zCsr += sqlStrlen30(zCsr);
-		}
-		for(i=0; i<16 && i<pMem->n; i++) {
-			char z = pMem->z[i];
-			if (z<32 || z>126) *zCsr++ = '.';
-			else *zCsr++ = z;
-		}
-		sql_snprintf(100, zCsr, "]%s", "(8)");
-		zCsr += sqlStrlen30(zCsr);
-		if (f & MEM_Zero) {
-			sql_snprintf(100, zCsr,"+%dz",pMem->u.nZero);
-			zCsr += sqlStrlen30(zCsr);
-		}
-		*zCsr = '\0';
-	} else if (pMem->type == MEM_TYPE_STR) {
-		int j, k;
-		zBuf[0] = ' ';
-		if (f & MEM_Dyn) {
-			zBuf[1] = 'z';
-			assert((f & (MEM_Static|MEM_Ephem))==0);
-		} else if (f & MEM_Static) {
-			zBuf[1] = 't';
-			assert((f & (MEM_Dyn|MEM_Ephem))==0);
-		} else if (f & MEM_Ephem) {
-			zBuf[1] = 'e';
-			assert((f & (MEM_Static|MEM_Dyn))==0);
-		} else {
-			zBuf[1] = 's';
-		}
-		k = 2;
-		sql_snprintf(100, &zBuf[k], "%d", pMem->n);
-		k += sqlStrlen30(&zBuf[k]);
-		zBuf[k++] = '[';
-		for(j=0; j<15 && j<pMem->n; j++) {
-			u8 c = pMem->z[j];
-			if (c>=0x20 && c<0x7f) {
-				zBuf[k++] = c;
-			} else {
-				zBuf[k++] = '.';
-			}
-		}
-		zBuf[k++] = ']';
-		sql_snprintf(100,&zBuf[k],"(8)");
-		k += sqlStrlen30(&zBuf[k]);
-		zBuf[k++] = 0;
-	}
-}
-
-/*
- * Print the value of a register for tracing purposes:
- */
-static void
-memTracePrint(Mem *p)
-{
-	switch (p->type) {
-	case MEM_TYPE_NULL:
-		printf(" NULL");
-		return;
-	case MEM_TYPE_INT:
-		printf(" i:%lld", p->u.i);
-		return;
-	case MEM_TYPE_UINT:
-		printf(" u:%"PRIu64"", p->u.u);
-		return;
-	case MEM_TYPE_DOUBLE:
-		printf(" r:%g", p->u.r);
-		return;
-	case MEM_TYPE_INVALID:
-		printf(" undefined");
-		return;
-	case MEM_TYPE_BOOL:
-		printf(" bool:%s", SQL_TOKEN_BOOLEAN(p->u.b));
-		return;
-	case MEM_TYPE_UUID:
-		printf(" uuid:%s", tt_uuid_str(&p->u.uuid));
-		return;
-	case MEM_TYPE_DEC:
-		printf(" decimal:%s", decimal_str(&p->u.d));
-		return;
-	default: {
-		char zBuf[200];
-		sqlVdbeMemPrettyPrint(p, zBuf);
-		printf(" %s", zBuf);
-		if ((p->type & (MEM_TYPE_MAP | MEM_TYPE_ARRAY)) != 0)
-			printf(" subtype=0x%02x", SQL_SUBTYPE_MSGPACK);
-		return;
-	}
-	}
-}
-
-void
-registerTrace(int iReg, Mem *p) {
-	printf("REG[%d] = ", iReg);
-	memTracePrint(p);
-	printf("\n");
-}
 #endif
-
-/*
- * If the given Mem* has a zero-filled tail, turn it into an ordinary
- * blob stored in dynamically allocated space.
- */
-int
-sqlVdbeMemExpandBlob(Mem * pMem)
-{
-	int nByte;
-	assert(pMem->flags & MEM_Zero);
-	assert(pMem->type == MEM_TYPE_BIN);
-
-	/* Set nByte to the number of bytes required to store the expanded blob. */
-	nByte = pMem->n + pMem->u.nZero;
-	if (nByte <= 0) {
-		nByte = 1;
-	}
-	if (sqlVdbeMemGrow(pMem, nByte, 1)) {
-		return -1;
-	}
-
-	memset(&pMem->z[pMem->n], 0, pMem->u.nZero);
-	pMem->n += pMem->u.nZero;
-	pMem->flags &= ~(MEM_Zero | MEM_Term);
-	return 0;
-}
 
 static int
 sqlVdbeMemGrow(struct Mem *pMem, int n, int bPreserve)
@@ -2952,13 +2708,9 @@ sqlVdbeMemGrow(struct Mem *pMem, int n, int bPreserve)
 	if (bPreserve && pMem->z && pMem->z != pMem->zMalloc) {
 		memcpy(pMem->zMalloc, pMem->z, pMem->n);
 	}
-	if ((pMem->flags & MEM_Dyn) != 0) {
-		assert(pMem->xDel != 0 && pMem->xDel != SQL_DYNAMIC);
-		pMem->xDel((void *)(pMem->z));
-	}
 
 	pMem->z = pMem->zMalloc;
-	pMem->flags &= ~(MEM_Dyn | MEM_Ephem | MEM_Static);
+	pMem->flags &= ~(MEM_Ephem | MEM_Static);
 	return 0;
 }
 
@@ -2977,11 +2729,9 @@ int
 sqlVdbeMemClearAndResize(Mem * pMem, int szNew)
 {
 	assert(szNew > 0);
-	assert((pMem->flags & MEM_Dyn) == 0 || pMem->szMalloc == 0);
 	if (pMem->szMalloc < szNew) {
 		return sqlVdbeMemGrow(pMem, szNew, 0);
 	}
-	assert((pMem->flags & MEM_Dyn) == 0);
 	pMem->z = pMem->zMalloc;
 	return 0;
 }
@@ -3036,39 +2786,9 @@ int
 sqlVdbeMemTooBig(Mem * p)
 {
 	assert(p->db != 0);
-	if (mem_is_bytes(p)) {
-		int n = p->n;
-		if (p->flags & MEM_Zero) {
-			n += p->u.nZero;
-		}
-		return n > p->db->aLimit[SQL_LIMIT_LENGTH];
-	}
+	if (mem_is_bytes(p))
+		return p->n > p->db->aLimit[SQL_LIMIT_LENGTH];
 	return 0;
-}
-
-int
-sql_vdbemem_finalize(struct Mem *mem, struct func *func)
-{
-	assert(func != NULL);
-	assert(func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
-	assert(func->def->aggregate == FUNC_AGGREGATE_GROUP);
-	assert(mem->type == MEM_TYPE_NULL || func == mem->u.func);
-	sql_context ctx;
-	memset(&ctx, 0, sizeof(ctx));
-	Mem t;
-	memset(&t, 0, sizeof(t));
-	t.type = MEM_TYPE_NULL;
-	assert(t.flags == 0);
-	t.db = mem->db;
-	ctx.pOut = &t;
-	ctx.pMem = mem;
-	ctx.func = func;
-	((struct func_sql_builtin *)func)->finalize(&ctx);
-	assert((mem->flags & MEM_Dyn) == 0);
-	if (mem->szMalloc > 0)
-		sqlDbFree(mem->db, mem->zMalloc);
-	memcpy(mem, &t, sizeof(t));
-	return ctx.is_aborted ? -1 : 0;
 }
 
 int
@@ -3136,6 +2856,15 @@ mem_from_mp_ephemeral(struct Mem *mem, const char *buf, uint32_t *len)
 			if (mp_decode_decimal(&buf, &mem->u.d) == NULL)
 				return -1;
 			mem->type = MEM_TYPE_DEC;
+			mem->flags = 0;
+			break;
+		} else if (type == MP_DATETIME) {
+			if (datetime_unpack(&buf, size, &mem->u.dt) == NULL) {
+				diag_set(ClientError, ER_INVALID_MSGPACK,
+					 "Invalid MP_DATETIME MsgPack format");
+				return -1;
+			}
+			mem->type = MEM_TYPE_DATETIME;
 			mem->flags = 0;
 			break;
 		}
@@ -3231,7 +2960,7 @@ mem_from_mp(struct Mem *mem, const char *buf, uint32_t *len)
 }
 
 void
-mpstream_encode_vdbe_mem(struct mpstream *stream, struct Mem *var)
+mem_to_mpstream(const struct Mem *var, struct mpstream *stream)
 {
 	assert(memIsValid(var));
 	switch (var->type) {
@@ -3251,14 +2980,8 @@ mpstream_encode_vdbe_mem(struct mpstream *stream, struct Mem *var)
 		mpstream_encode_double(stream, var->u.r);
 		return;
 	case MEM_TYPE_BIN:
-		if ((var->flags & MEM_Zero) != 0) {
-			mpstream_encode_binl(stream, var->n + var->u.nZero);
-			mpstream_memcpy(stream, var->z, var->n);
-			mpstream_memset(stream, 0, var->u.nZero);
-		} else {
-			mpstream_encode_binl(stream, var->n);
-			mpstream_memcpy(stream, var->z, var->n);
-		}
+		mpstream_encode_binl(stream, var->n);
+		mpstream_memcpy(stream, var->z, var->n);
 		return;
 	case MEM_TYPE_ARRAY:
 	case MEM_TYPE_MAP:
@@ -3273,37 +2996,42 @@ mpstream_encode_vdbe_mem(struct mpstream *stream, struct Mem *var)
 	case MEM_TYPE_DEC:
 		mpstream_encode_decimal(stream, &var->u.d);
 		return;
+	case MEM_TYPE_DATETIME:
+		mpstream_encode_datetime(stream, &var->u.dt);
+		return;
 	default:
 		unreachable();
 	}
 }
 
 char *
-sql_vdbe_mem_encode_tuple(struct Mem *fields, uint32_t field_count,
-			  uint32_t *tuple_size, struct region *region)
+mem_encode_array(const struct Mem *mems, uint32_t count, uint32_t *size,
+		 struct region *region)
 {
 	size_t used = region_used(region);
 	bool is_error = false;
 	struct mpstream stream;
 	mpstream_init(&stream, region, region_reserve_cb, region_alloc_cb,
 		      set_encode_error, &is_error);
-	mpstream_encode_array(&stream, field_count);
-	for (struct Mem *field = fields; field < fields + field_count; field++)
-		mpstream_encode_vdbe_mem(&stream, field);
+	mpstream_encode_array(&stream, count);
+	for (const struct Mem *mem = mems; mem < mems + count; mem++)
+		mem_to_mpstream(mem, &stream);
 	mpstream_flush(&stream);
 	if (is_error) {
+		region_truncate(region, used);
 		diag_set(OutOfMemory, stream.pos - stream.buf,
 			 "mpstream_flush", "stream");
 		return NULL;
 	}
-	*tuple_size = region_used(region) - used;
-	char *tuple = region_join(region, *tuple_size);
-	if (tuple == NULL) {
-		diag_set(OutOfMemory, *tuple_size, "region_join", "tuple");
+	*size = region_used(region) - used;
+	char *array = region_join(region, *size);
+	if (array == NULL) {
+		region_truncate(region, used);
+		diag_set(OutOfMemory, *size, "region_join", "array");
 		return NULL;
 	}
-	mp_tuple_assert(tuple, tuple + *tuple_size);
-	return tuple;
+	mp_tuple_assert(array, array + *size);
+	return array;
 }
 
 /**
@@ -3349,9 +3077,12 @@ port_vdbemem_dump_lua(struct port *base, struct lua_State *L, bool is_flat)
 			break;
 		case MEM_TYPE_STR:
 		case MEM_TYPE_BIN:
+			lua_pushlstring(L, mem->z, mem->n);
+			break;
 		case MEM_TYPE_MAP:
 		case MEM_TYPE_ARRAY:
-			lua_pushlstring(L, mem->z, mem->n);
+			luamp_decode(L, luaL_msgpack_default,
+				     (const char **)&mem->z);
 			break;
 		case MEM_TYPE_NULL:
 			lua_pushnil(L);
@@ -3364,6 +3095,9 @@ port_vdbemem_dump_lua(struct port *base, struct lua_State *L, bool is_flat)
 			break;
 		case MEM_TYPE_DEC:
 			*lua_pushdecimal(L) = mem->u.d;
+			break;
+		case MEM_TYPE_DATETIME:
+			*luaT_pushdatetime(L) = mem->u.dt;
 			break;
 		default:
 			unreachable();
@@ -3383,7 +3117,7 @@ port_vdbemem_get_msgpack(struct port *base, uint32_t *size)
 		      set_encode_error, &is_error);
 	mpstream_encode_array(&stream, port->mem_count);
 	for (uint32_t i = 0; i < port->mem_count && !is_error; i++)
-		mpstream_encode_vdbe_mem(&stream, (struct Mem *)port->mem + i);
+		mem_to_mpstream((struct Mem *)port->mem + i, &stream);
 	mpstream_flush(&stream);
 	*size = region_used(region) - region_svp;
 	if (is_error)
@@ -3448,10 +3182,9 @@ port_lua_get_vdbemem(struct port *base, uint32_t *size)
 		return NULL;
 	for (int i = 0; i < argc; i++) {
 		struct luaL_field field;
-		if (luaL_tofield(L, luaL_msgpack_default,
-				 NULL, -1 - i, &field) < 0) {
+		int index = -1 - i;
+		if (luaL_tofield(L, luaL_msgpack_default, index, &field) < 0)
 			goto error;
-		}
 		mem_clear(&val[i]);
 		switch (field.type) {
 		case MP_BOOL:
@@ -3484,11 +3217,46 @@ port_lua_get_vdbemem(struct port *base, uint32_t *size)
 					 field.sval.len) != 0)
 				goto error;
 			break;
+		case MP_MAP:
+		case MP_ARRAY: {
+			size_t used = region_used(region);
+			bool is_map = field.type == MP_MAP;
+			struct mpstream stream;
+			bool is_error = false;
+			mpstream_init(&stream, region, region_reserve_cb,
+				      region_alloc_cb, set_encode_error,
+				      &is_error);
+			lua_pushvalue(L, index);
+			luamp_encode_r(L, luaL_msgpack_default, &stream,
+				       &field, 0);
+			lua_pop(L, 1);
+			mpstream_flush(&stream);
+			if (is_error) {
+				diag_set(OutOfMemory, stream.pos - stream.buf,
+					 "mpstream_flush", "stream");
+				return NULL;
+			}
+			uint32_t size = region_used(region) - used;
+			char *raw = region_join(region, size);
+			if (raw == NULL) {
+				diag_set(OutOfMemory, size, "region_join",
+					 "raw");
+				goto error;
+			}
+			int rc = is_map ? mem_copy_map(&val[i], raw, size) :
+				 mem_copy_array(&val[i], raw, size);
+			if (rc != 0)
+				goto error;
+			region_truncate(region, used);
+			break;
+		}
 		case MP_EXT: {
 			if (field.ext_type == MP_UUID) {
 				mem_set_uuid(&val[i], field.uuidval);
 			} else if (field.ext_type == MP_DECIMAL) {
 				mem_set_dec(&val[i], field.decval);
+			} else if (field.ext_type == MP_DATETIME) {
+				mem_set_datetime(&val[i], field.dateval);
 			} else {
 				diag_set(ClientError, ER_SQL_EXECUTE,
 					 "Unsupported type passed from Lua");
@@ -3607,6 +3375,16 @@ port_c_get_vdbemem(struct port *base, uint32_t *size)
 					goto error;
 				}
 				val[i].type = MEM_TYPE_DEC;
+				break;
+			} else if (type == MP_DATETIME) {
+				struct datetime *dt = &val[i].u.dt;
+				if (datetime_unpack(&data, len, dt) == 0) {
+					diag_set(ClientError,
+						 ER_INVALID_MSGPACK, "Invalid "
+						 "MP_DATETIME MsgPack format");
+					goto error;
+				}
+				val[i].type = MEM_TYPE_DATETIME;
 				break;
 			}
 			data += len;

@@ -43,7 +43,6 @@
 #include "box/box.h"
 #include "box/txn.h"
 #include "box/func.h"
-#include "box/session.h"
 #include "box/mp_error.h"
 
 #include "box/lua/error.h"
@@ -67,6 +66,7 @@
 #include "box/lua/execute.h"
 #include "box/lua/key_def.h"
 #include "box/lua/merger.h"
+#include "box/lua/watcher.h"
 
 #include "mpstream/mpstream.h"
 
@@ -415,8 +415,7 @@ luamp_encode_extension_box(struct lua_State *L, int idx,
 		return MP_ARRAY;
 	}
 	struct error *err = luaL_iserror(L, idx);
-	struct serializer_opts *opts = &current_session()->meta.serializer_opts;
-	if (err != NULL && opts->error_marshaling_enabled)
+	if (err != NULL)
 		error_to_mpstream(err, stream);
 
 	return MP_EXT;
@@ -480,6 +479,7 @@ box_lua_init(struct lua_State *L)
 	box_lua_session_init(L);
 	box_lua_xlog_init(L);
 	box_lua_sql_init(L);
+	box_lua_watcher_init(L);
 	luaopen_net_box(L);
 	lua_pop(L, 1);
 	tarantool_lua_console_init(L);

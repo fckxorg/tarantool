@@ -33,7 +33,7 @@ static struct mh_strnptr_t *module_cache = NULL;
 static struct module *
 cache_find(const char *str, size_t len)
 {
-	mh_int_t e = mh_strnptr_find_inp(module_cache, str, len);
+	mh_int_t e = mh_strnptr_find_str(module_cache, str, len);
 	if (e == mh_end(module_cache))
 		return NULL;
 	return mh_strnptr_node(module_cache, e)->val;
@@ -45,7 +45,7 @@ cache_update(struct module *m)
 	const char *str = m->package;
 	size_t len = m->package_len;
 
-	mh_int_t e = mh_strnptr_find_inp(module_cache, str, len);
+	mh_int_t e = mh_strnptr_find_str(module_cache, str, len);
 	if (e == mh_end(module_cache))
 		panic("module: failed to update cache: %s", str);
 
@@ -53,7 +53,7 @@ cache_update(struct module *m)
 	mh_strnptr_node(module_cache, e)->val = m;
 }
 
-static int
+static void
 cache_put(struct module *m)
 {
 	const struct mh_strnptr_node_t nd = {
@@ -65,20 +65,12 @@ cache_put(struct module *m)
 
 	struct mh_strnptr_node_t prev;
 	struct mh_strnptr_node_t *prev_ptr = &prev;
-
-	mh_int_t e = mh_strnptr_put(module_cache, &nd, &prev_ptr, NULL);
-	if (e == mh_end(module_cache)) {
-		diag_set(OutOfMemory, sizeof(nd), "malloc",
-			 "module_cache node");
-		return -1;
-	}
-
+	mh_strnptr_put(module_cache, &nd, &prev_ptr, NULL);
 	/*
 	 * Just to make sure we haven't replaced something, the
 	 * entries must be explicitly deleted.
 	 */
 	assert(prev_ptr == NULL);
-	return 0;
 }
 
 static void
@@ -87,7 +79,7 @@ cache_del(struct module *m)
 	const char *str = m->package;
 	size_t len = m->package_len;
 
-	mh_int_t e = mh_strnptr_find_inp(module_cache, str, len);
+	mh_int_t e = mh_strnptr_find_str(module_cache, str, len);
 	if (e != mh_end(module_cache)) {
 		struct module *v = mh_strnptr_node(module_cache, e)->val;
 		if (v == m) {
@@ -404,10 +396,7 @@ module_load_force(const char *package, size_t package_len)
 	if (c != NULL) {
 		cache_update(m);
 	} else {
-		if (cache_put(m) != 0) {
-			module_unload(m);
-			return NULL;
-		}
+		cache_put(m);
 	}
 
 	return m;
@@ -452,10 +441,8 @@ module_load(const char *package, size_t package_len)
 			cache_update(m);
 	} else {
 		m = module_new(package, package_len, path);
-		if (m != NULL && cache_put(m) != 0) {
-			module_unload(m);
-			return NULL;
-		}
+		if (m != NULL)
+			cache_put(m);
 	}
 
 	return m;
@@ -474,14 +461,8 @@ module_free(void)
 	module_cache = NULL;
 }
 
-int
+void
 module_init(void)
 {
 	module_cache = mh_strnptr_new();
-	if (module_cache == NULL) {
-		diag_set(OutOfMemory, sizeof(*module_cache),
-			 "malloc", "module_cache");
-		return -1;
-	}
-	return 0;
 }

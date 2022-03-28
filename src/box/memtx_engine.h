@@ -64,18 +64,18 @@ enum memtx_engine_free_mode {
 };
 
 /**
- * The state of memtx recovery process.
- * There is a global state of the entire engine state of each
- * space. The state of a space is initialized from the engine
- * state when the space is created. The exception is system
- * spaces, which are always created in the final (OK) state.
+ * Recovery state of memtx engine.
  *
- * The states exist to speed up recovery: initial state
+ * For faster recovery an optimization is used: initial recovery
  * assumes write-only flow of sorted rows from a snapshot.
- * It's followed by a state for read-write recovery
- * of rows from the write ahead log; these rows are
- * inserted only into the primary key. The final
- * state is for a fully functional space.
+ * It's followed by a final recovery state for read-write recovery
+ * of rows from the write ahead log; these rows are inserted only into
+ * the primary key.
+ * When recovery is finished all spaces become fully functional.
+ *
+ * Note that this state describes only optimization state of recovery.
+ * For instance in case of force recovery the state is set to MEMTX_OK
+ * nearly in the start before snapshot loading.
  */
 enum memtx_recovery_state {
 	/** The space has no indexes. */
@@ -118,11 +118,11 @@ enum memtx_reserve_extents_num {
  * allocated for each iterator (except rtree index iterator that
  * is significantly bigger so has own pool).
  */
-#define MEMTX_ITERATOR_SIZE (152)
+#define MEMTX_ITERATOR_SIZE (184)
 
 struct memtx_engine {
 	struct engine base;
-	/** Engine recovery state. */
+	/** Engine recovery state, see enum memtx_recovery_state description. */
 	enum memtx_recovery_state state;
 	/** Non-zero if there is a checkpoint (snapshot) in progress. */
 	struct checkpoint *checkpoint;
@@ -269,6 +269,37 @@ enum {
 };
 
 /**
+ * Allocates size bytes using the memtx allocator (MemtxAllocator::alloc).
+ * On error returns NULL. Does not set diag.
+ */
+extern void *
+(*memtx_alloc)(uint32_t size);
+
+/**
+ * Frees memory allocated with memtx_alloc.
+ */
+extern void
+(*memtx_free)(void *ptr);
+
+/**
+ * Allocate and return new memtx tuple. Data validation depends
+ * on @a validate value. On error returns NULL and set diag.
+ */
+extern struct tuple *
+(*memtx_tuple_new_raw)(struct tuple_format *format, const char *data,
+		       const char *end, bool validate);
+
+/**
+ * Returns the size of an allocation done with memtx_alloc.
+ * (The size is stored before the data.)
+ */
+static inline uint32_t
+memtx_alloc_size(void *ptr)
+{
+	return *((uint32_t *)ptr - 1);
+}
+
+/**
  * Allocate a block of size MEMTX_EXTENT_SIZE for memtx index
  * @ctx must point to memtx engine
  */
@@ -299,6 +330,42 @@ memtx_index_def_change_requires_rebuild(struct index *index,
 
 void
 memtx_set_tuple_format_vtab(const char *allocator_name);
+
+/**
+ * Converts a tuple from format in which it is stored in space
+ * to format in which, it should be visible for users.
+ */
+int
+memtx_prepare_result_tuple(struct tuple **result);
+
+/**
+ * Common function for all memtx indexes. Get tuple from memtx @a index
+ * and return it in @a result in format in which, it should be visible for
+ * users.
+ */
+int
+memtx_index_get(struct index *index, const char *key, uint32_t part_count,
+		struct tuple **result);
+
+/**
+ * Common function for all memtx indexes. Iterate to the next tuple and
+ * return it in @a ret in format in which, it should be visible for users.
+ */
+int
+memtx_iterator_next(struct iterator *it, struct tuple **ret);
+
+/*
+ * Check tuple data correspondence to the space format.
+ * Same as simple tuple_validate function, but can work
+ * with compressed tuples.
+ * @param format Format to which the tuple must match.
+ * @param tuple  Tuple to validate.
+ *
+ * @retval  0 The tuple is valid.
+ * @retval -1 The tuple is invalid.
+ */
+int
+memtx_tuple_validate(struct tuple_format *format, struct tuple *tuple);
 
 #if defined(__cplusplus)
 } /* extern "C" */

@@ -15,7 +15,9 @@ box.cfg.nosuchoption = 1
  | ...
 cfg_filter(box.cfg)
  | ---
- | - - - background
+ | - - - audit_nonblock
+ |     - true
+ |   - - background
  |     - false
  |   - - checkpoint_count
  |     - 2
@@ -82,9 +84,11 @@ cfg_filter(box.cfg)
  |   - - replication_sync_timeout
  |     - <hidden>
  |   - - replication_synchro_quorum
- |     - 1
+ |     - N / 2 + 1
  |   - - replication_synchro_timeout
  |     - 5
+ |   - - replication_threads
+ |     - 1
  |   - - replication_timeout
  |     - 1
  |   - - slab_alloc_factor
@@ -97,10 +101,14 @@ cfg_filter(box.cfg)
  |     - true
  |   - - too_long_threshold
  |     - 0.5
+ |   - - txn_timeout
+ |     - 3153600000
  |   - - vinyl_bloom_fpr
  |     - 0.05
  |   - - vinyl_cache
  |     - 134217728
+ |   - - vinyl_defer_deletes
+ |     - false
  |   - - vinyl_dir
  |     - <hidden>
  |   - - vinyl_max_tuple_size
@@ -140,7 +148,9 @@ box.cfg()
  | ...
 cfg_filter(box.cfg)
  | ---
- | - - - background
+ | - - - audit_nonblock
+ |     - true
+ |   - - background
  |     - false
  |   - - checkpoint_count
  |     - 2
@@ -207,9 +217,11 @@ cfg_filter(box.cfg)
  |   - - replication_sync_timeout
  |     - <hidden>
  |   - - replication_synchro_quorum
- |     - 1
+ |     - N / 2 + 1
  |   - - replication_synchro_timeout
  |     - 5
+ |   - - replication_threads
+ |     - 1
  |   - - replication_timeout
  |     - 1
  |   - - slab_alloc_factor
@@ -222,10 +234,14 @@ cfg_filter(box.cfg)
  |     - true
  |   - - too_long_threshold
  |     - 0.5
+ |   - - txn_timeout
+ |     - 3153600000
  |   - - vinyl_bloom_fpr
  |     - 0.05
  |   - - vinyl_cache
  |     - 134217728
+ |   - - vinyl_defer_deletes
+ |     - false
  |   - - vinyl_dir
  |     - <hidden>
  |   - - vinyl_max_tuple_size
@@ -267,10 +283,6 @@ box.cfg{sherlock = 'holmes'}
  | ...
 
 -- check that cfg with unexpected type of parameter fails
-box.cfg{listen = {}}
- | ---
- | - error: 'Incorrect value for option ''listen'': should be one of types string, number'
- | ...
 box.cfg{wal_dir = 0}
  | ---
  | - error: 'Incorrect value for option ''wal_dir'': should be of type string'
@@ -574,7 +586,7 @@ _ = box.schema.space.create('test_vinyl', {engine = 'vinyl'})
  | ...
 _ = box.space.test_vinyl:create_index('pk') -- error
  | ---
- | - error: can not access vinyl data directory
+ | - error: 'can not access vinyl data directory: No such file or directory'
  | ...
 box.snapshot()
  | ---
@@ -638,7 +650,7 @@ test_run:cmd("start server cfg_tester6")
  | ---
  | - true
  | ...
-test_run:grep_log('cfg_tester6', 'set \'vinyl_memory\' configuration option to 1073741824', 1000)
+test_run:grep_log('cfg_tester6', 'set \'vinyl_memory\' configuration option to 1073741824')
  | ---
  | - set 'vinyl_memory' configuration option to 1073741824
  | ...
@@ -663,12 +675,12 @@ test_run:cmd("start server cfg_tester7")
  | - true
  | ...
 -- test there is replication log in log
-test_run:grep_log('cfg_tester7', 'set \'replication\' configuration option to', 1000)
+test_run:grep_log('cfg_tester7', 'set \'replication\' configuration option to')
  | ---
  | - set 'replication' configuration option to
  | ...
 -- test there is no password in log
-test_run:grep_log('cfg_tester7', 'test%-cluster%-cookie', 1000)
+test_run:grep_log('cfg_tester7', 'test%-cluster%-cookie')
  | ---
  | - null
  | ...
@@ -696,7 +708,7 @@ test_run:cmd("start server cfg_tester8")
 version_warning = "Please, consider using box.schema.upgrade()."
  | ---
  | ...
-test_run:wait_log('cfg_tester8', version_warning, 1000, 1.0) ~= nil
+test_run:wait_log('cfg_tester8', version_warning, nil, 1.0) ~= nil
  | ---
  | - true
  | ...
@@ -718,7 +730,7 @@ test_run:cmd("start server cfg_tester9")
  | - true
  | ...
 --- Check that the warning isn't printed.
-test_run:wait_log('cfg_tester9', version_warning, 1000, 1.0) == nil
+test_run:wait_log('cfg_tester9', version_warning, nil, 1.0) == nil
  | ---
  | - true
  | ...

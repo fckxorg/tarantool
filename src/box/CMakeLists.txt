@@ -1,5 +1,5 @@
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/src/box/lua)
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/src/box/sql)
+file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/src/box/lua)
+file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/src/box/sql)
 
 # Sometimes 'spying' code is not acceptable even if it would be
 # disabled by default. That option allows to remove the feedback
@@ -7,21 +7,21 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/src/box/sql)
 option(ENABLE_FEEDBACK_DAEMON "Feedback daemon which reports debug data to the Tarantool team" ON)
 
 set(lua_sources)
-lua_source(lua_sources lua/load_cfg.lua)
-lua_source(lua_sources lua/schema.lua)
-lua_source(lua_sources lua/tuple.lua)
-lua_source(lua_sources lua/session.lua)
+lua_source(lua_sources lua/load_cfg.lua load_cfg_lua)
+lua_source(lua_sources lua/schema.lua schema_lua)
+lua_source(lua_sources lua/tuple.lua tuple_lua)
+lua_source(lua_sources lua/session.lua session_lua)
 if (ENABLE_FEEDBACK_DAEMON)
-    lua_source(lua_sources lua/feedback_daemon.lua)
+    lua_source(lua_sources lua/feedback_daemon.lua feedback_daemon_lua)
 endif()
-lua_source(lua_sources lua/net_box.lua)
-lua_source(lua_sources lua/upgrade.lua)
-lua_source(lua_sources lua/console.lua)
-lua_source(lua_sources lua/xlog.lua)
-lua_source(lua_sources lua/key_def.lua)
-lua_source(lua_sources lua/merger.lua)
+lua_source(lua_sources lua/net_box.lua net_box_lua)
+lua_source(lua_sources lua/upgrade.lua upgrade_lua)
+lua_source(lua_sources lua/console.lua console_lua)
+lua_source(lua_sources lua/xlog.lua xlog_lua)
+lua_source(lua_sources lua/key_def.lua key_def_lua)
+lua_source(lua_sources lua/merger.lua merger_lua)
 set(bin_sources)
-bin_source(bin_sources bootstrap.snap bootstrap.h)
+bin_source(bin_sources bootstrap.snap bootstrap.h bootstrap_bin)
 
 set(sql_sources
     sql/opcodes.c
@@ -55,7 +55,6 @@ set(sql_sources
     sql/tokenize.c
     sql/treeview.c
     sql/trigger.c
-    sql/utf.c
     sql/update.c
     sql/util.c
     sql/vdbe.c
@@ -71,25 +70,29 @@ set(sql_sources
 )
 
 add_custom_target(box_generate_lua_sources
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src/box
+    WORKING_DIRECTORY ${PROJECT_BINARY_DIR}/src/box
     DEPENDS ${lua_sources})
 set_property(DIRECTORY PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${lua_sources})
 
 include_directories(${ZSTD_INCLUDE_DIRS})
-include_directories(${CMAKE_BINARY_DIR}/src/box/sql)
-include_directories(${CMAKE_BINARY_DIR}/src/box)
+include_directories(${PROJECT_BINARY_DIR}/src/box/sql)
+include_directories(${PROJECT_BINARY_DIR}/src/box)
+include_directories(${EXTRA_CORE_INCLUDE_DIRS})
+include_directories(${EXTRA_BOX_INCLUDE_DIRS})
 
 add_library(box_error STATIC error.cc errcode.c mp_error.cc)
 target_link_libraries(box_error core stat mpstream vclock)
 
-add_library(xrow STATIC xrow.c iproto_constants.c)
+add_library(xrow STATIC xrow.c iproto_constants.c iproto_features.c)
 target_link_libraries(xrow server core small vclock misc box_error
                       scramble ${MSGPUCK_LIBRARIES})
 
-add_library(tuple STATIC
+set(tuple_sources
     tuple.c
     field_map.c
     tuple_format.c
+    tuple_constraint_def.c
+    tuple_constraint.c
     xrow_update.c
     xrow_update_field.c
     xrow_update_array.c
@@ -108,12 +111,18 @@ add_library(tuple STATIC
     field_def.c
     opt_def.c
 )
-target_link_libraries(tuple json box_error core ${MSGPUCK_LIBRARIES} ${ICU_LIBRARIES} misc bit)
+
+if(ENABLE_TUPLE_COMPRESSION)
+    list(APPEND tuple_sources ${TUPLE_COMPRESSION_BOX_SOURCES})
+endif()
+
+add_library(tuple STATIC ${tuple_sources})
+target_link_libraries(tuple json box_error core ${MSGPUCK_LIBRARIES} misc bit coll)
 
 add_library(xlog STATIC xlog.c)
 target_link_libraries(xlog core box_error crc32 ${ZSTD_LIBRARIES})
 
-add_library(box STATIC
+set(box_sources
     allocator.cc
     memtx_allocator.cc
     msgpack.c
@@ -124,10 +133,10 @@ add_library(box STATIC
     index.cc
     index_def.c
     iterator_type.c
-    memtx_hash.c
+    memtx_hash.cc
     memtx_tree.cc
-    memtx_rtree.c
-    memtx_bitset.c
+    memtx_rtree.cc
+    memtx_bitset.cc
     memtx_tx.c
     module_cache.c
     engine.c
@@ -158,13 +167,17 @@ add_library(box STATIC
     vy_quota.c
     request.c
     space.c
+    space_cache.c
     space_def.c
     sequence.c
     ck_constraint.c
     fk_constraint.c
     constraint_id.c
     func.c
+    func_cache.c
     func_def.c
+    tuple_constraint_func.c
+    tuple_constraint_fkey.c
     key_list.c
     alter.cc
     schema.cc
@@ -194,6 +207,7 @@ add_library(box STATIC
     call.c
     merger.c
     ibuf.c
+    watcher.c
     ${sql_sources}
     ${lua_sources}
     lua/init.c
@@ -218,17 +232,26 @@ add_library(box STATIC
     lua/execute.c
     lua/key_def.c
     lua/merger.c
+    lua/watcher.c
     ${bin_sources})
+
+if(ENABLE_AUDIT_LOG)
+    list(APPEND box_sources ${AUDIT_LOG_SOURCES})
+else()
+    list(APPEND box_sources audit.c)
+endif()
+
+add_library(box STATIC ${box_sources})
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_definitions(-DSQL_DEBUG=1)
 endif()
 add_definitions(-DSQL_TEST=1)
 
-set(EXT_SRC_DIR ${CMAKE_SOURCE_DIR}/extra)
-set(EXT_BIN_DIR ${CMAKE_BINARY_DIR}/extra)
-set(SQL_SRC_DIR ${CMAKE_SOURCE_DIR}/src/box/sql)
-set(SQL_BIN_DIR ${CMAKE_BINARY_DIR}/src/box/sql)
+set(EXT_SRC_DIR ${PROJECT_SOURCE_DIR}/extra)
+set(EXT_BIN_DIR ${PROJECT_BINARY_DIR}/extra)
+set(SQL_SRC_DIR ${PROJECT_SOURCE_DIR}/src/box/sql)
+set(SQL_BIN_DIR ${PROJECT_BINARY_DIR}/src/box/sql)
 
 include_directories(${SQL_SRC_DIR})
 include_directories(${SQL_BIN_DIR})

@@ -9,17 +9,18 @@
 #include <stdint.h>
 #include <limits.h>
 #include <time.h>
+#include <spawn.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 
 #include "small/static.h"
 #include "trivia/util.h"
-#include "uuid/tt_uuid.h"
 
 #include "box/replication.h"
 #include "backtrace.h"
 #include "crash.h"
 #include "say.h"
+#include "tt_uuid.h"
 
 #define pr_fmt(fmt)		"crash: " fmt
 #define pr_debug(fmt, ...)	say_debug(pr_fmt(fmt), ##__VA_ARGS__)
@@ -252,6 +253,7 @@ crash_report_feedback_daemon(struct crash_info *cinfo)
 	char *head = p;
 
 	int total = 0;
+	(void)total;
 	int size = 0;
 
 #define snprintf_safe(...) SNPRINT(total, snprintf, p, size, __VA_ARGS__)
@@ -392,29 +394,13 @@ crash_report_feedback_daemon(struct crash_info *cinfo)
 		[6] = NULL,
 	};
 
-	/*
-	 * Can't use fork here because libev has own
-	 * at_fork helpers with mutex where we might
-	 * stuck (see popen code).
-	 */
-	pid_t pid = vfork();
-	if (pid == 0) {
-		extern char **environ;
-		/*
-		 * The script must exit at the end but there
-		 * is no simple way to make sure from inside
-		 * of a signal crash handler. So just hope it
-		 * is running fine.
-		 */
-		execve(exec_argv[0], exec_argv, environ);
-		pr_crit("exec(%s,[%s,%s,%s,%s,%s,%s,%s]) failed",
-			exec_argv[0], exec_argv[0],
-			exec_argv[1], exec_argv[2],
-			exec_argv[3], exec_argv[4],
-			exec_argv[5], exec_argv[6]);
-		_exit(1);
-	} else if (pid < 0) {
-		pr_crit("unable to vfork (errno %d)", errno);
+	extern char **environ;
+	int rc = posix_spawn(NULL, exec_argv[0], NULL, NULL, exec_argv, environ);
+	if (rc != 0) {
+		pr_crit("posix_spawn with "
+			"exec(%s,[%s,%s,%s,%s,%s,%s,%s]) failed: %s", exec_argv[0],
+			exec_argv[0], exec_argv[1], exec_argv[2], exec_argv[3],
+			exec_argv[4], exec_argv[5], exec_argv[6], strerror(rc));
 		return -1;
 	}
 

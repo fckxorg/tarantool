@@ -2,6 +2,7 @@ enable_tnt_compile_flags()
 
 include_directories(${LUAJIT_INCLUDE_DIRS})
 include_directories(${MSGPUCK_INCLUDE_DIRS})
+include_directories(${EXTRA_CORE_INCLUDE_DIRS})
 
 function(build_module module files)
     add_library(${module} SHARED ${files})
@@ -63,7 +64,13 @@ add_subdirectory(app-tap)
 add_subdirectory(box)
 add_subdirectory(box-tap)
 add_subdirectory(sql-tap)
+add_subdirectory(sql-luatest)
 if(ENABLE_FUZZER)
     add_subdirectory(fuzz)
 endif()
 add_subdirectory(unit)
+foreach(TEST_SUITE ${EXTRA_TEST_SUITES})
+    add_subdirectory(
+        "${EXTRA_TEST_SUITES_SOURCE_DIR}/${TEST_SUITE}"
+        "${EXTRA_TEST_SUITES_BINARY_DIR}/${TEST_SUITE}")
+endforeach()

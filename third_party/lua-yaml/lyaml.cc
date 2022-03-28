@@ -51,9 +51,10 @@ extern "C" {
 #include "lua/utils.h"
 #include "lua/serializer.h"
 #include "lib/core/decimal.h"
+#include "diag.h"
 #include "tt_static.h"
 #include "mp_extension_types.h" /* MP_DECIMAL, MP_UUID */
-#include "uuid/tt_uuid.h" /* tt_uuid_to_string(), UUID_STR_LEN */
+#include "tt_uuid.h" /* tt_uuid_to_string(), UUID_STR_LEN */
 
 #define LUAYAML_TAG_PREFIX "tag:yaml.org,2002:"
 
@@ -617,7 +618,7 @@ static int dump_node(struct lua_yaml_dumper *dumper)
    yaml_event_t ev;
    yaml_scalar_style_t style = YAML_PLAIN_SCALAR_STYLE;
    int is_binary = 0;
-   char buf[FPCONV_G_FMT_BUFSIZE];
+   char buf[MAX(FPCONV_G_FMT_BUFSIZE, DT_TO_STRING_BUFSIZE)];
    struct luaL_field field;
    bool unused;
    (void) unused;
@@ -706,6 +707,14 @@ static int dump_node(struct lua_yaml_dumper *dumper)
       case MP_UUID:
          str = tt_uuid_str(field.uuidval);
          len = UUID_STR_LEN;
+         break;
+      case MP_ERROR:
+         str = field.errorval->errmsg;
+         len = strlen(str);
+         break;
+      case MP_DATETIME:
+         len = datetime_to_string(field.dateval, buf, sizeof(buf));
+         str = buf;
          break;
       default:
          assert(0); /* checked by luaL_checkfield() */

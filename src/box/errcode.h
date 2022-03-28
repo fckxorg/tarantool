@@ -59,7 +59,7 @@ struct errcode_record {
 	/*  4 */_(ER_TUPLE_NOT_FOUND,		"Tuple doesn't exist in index '%s' in space '%s'") \
 	/*  5 */_(ER_UNSUPPORTED,		"%s does not support %s") \
 	/*  6 */_(ER_NONMASTER,			"Can't modify data on a replication slave. My master is: %s") \
-	/*  7 */_(ER_READONLY,			"Can't modify data because this instance is in read-only mode.") \
+	/*  7 */_(ER_READONLY,			"Can't modify data on a read-only instance") \
 	/*  8 */_(ER_INJECTION,			"Error injection '%s'") \
 	/*  9 */_(ER_CREATE_SPACE,		"Failed to create space '%s': %s") \
 	/* 10 */_(ER_SPACE_EXISTS,		"Space '%s' already exists") \
@@ -281,8 +281,18 @@ struct errcode_record {
 	/*226 */_(ER_NOT_LEADER,		"The instance is not a leader. New leader is %u")\
 	/*227 */_(ER_SYNC_QUEUE_UNCLAIMED,	"The synchronous transaction queue doesn't belong to any instance")\
 	/*228 */_(ER_SYNC_QUEUE_FOREIGN,	"The synchronous transaction queue belongs to other instance with id %u")\
-	/*226 */_(ER_UNABLE_TO_PROCESS_IN_STREAM, "Unable to process %s request in stream") \
-	/*227 */_(ER_UNABLE_TO_PROCESS_OUT_OF_STREAM, "Unable to process %s request out of stream") \
+	/*229 */_(ER_UNABLE_TO_PROCESS_IN_STREAM, "Unable to process %s request in stream") \
+	/*230 */_(ER_UNABLE_TO_PROCESS_OUT_OF_STREAM, "Unable to process %s request out of stream") \
+	/*231 */_(ER_TRANSACTION_TIMEOUT,       "Transaction has been aborted by timeout") \
+	/*232 */_(ER_ACTIVE_TIMER,              "Operation is not permitted if timer is already running") \
+	/*233 */_(ER_TUPLE_FIELD_COUNT_LIMIT,	"Tuple field count limit reached: see box.schema.FIELD_MAX") \
+	/*234 */_(ER_CREATE_CONSTRAINT,		"Failed to create constraint '%s' in space '%s': %s") \
+	/*235 */_(ER_FIELD_CONSTRAINT_FAILED,	"Check constraint '%s' failed for field '%s'") \
+	/*236 */_(ER_TUPLE_CONSTRAINT_FAILED,	"Check constraint '%s' failed for tuple") \
+	/*237 */_(ER_CREATE_FOREIGN_KEY,	"Failed to create foreign key '%s' in space '%s': %s") \
+	/*238 */_(ER_FOREIGN_KEY_INTEGRITY,	"Foreign key '%s' integrity check failed: %s") \
+	/*239 */_(ER_FIELD_FOREIGN_KEY_FAILED,	"Foreign key constraint '%s' failed for field '%s': %s") \
+	/*239 */_(ER_COMPLEX_FOREIGN_KEY_FAILED, "Foreign key constraint '%s' failed: %s") \
 
 /*
  * !IMPORTANT! Please follow instructions at start of the file

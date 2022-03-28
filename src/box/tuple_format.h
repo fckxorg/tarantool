@@ -37,6 +37,7 @@
 #include "json/json.h"
 #include "tuple_dictionary.h"
 #include "field_map.h"
+#include "index.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -83,21 +84,9 @@ struct tuple_format_vtab {
 	struct tuple*
 	(*tuple_new)(struct tuple_format *format, const char *data,
 	             const char *end);
-	/**
-	 * Free a tuple_chunk allocated for given tuple and
-	 * data.
-	 */
-	void
-	(*tuple_chunk_delete)(struct tuple_format *format,
-			      const char *data);
-	/**
-	 * Allocate a new tuple_chunk for given tuple and data and
-	 * return a pointer to it's data section.
-	 */
-	const char *
-	(*tuple_chunk_new)(struct tuple_format *format, struct tuple *tuple,
-			   const char *data, uint32_t data_sz);
 };
+
+struct tuple_constraint;
 
 /** Tuple field meta information for tuple_format. */
 struct tuple_field {
@@ -134,6 +123,8 @@ struct tuple_field {
 	struct coll *coll;
 	/** Collation identifier. */
 	uint32_t coll_id;
+	/** Type of compression for this field. */
+	enum compression_type compression_type;
 	/**
 	 * Bitmap of fields that must be present in a tuple
 	 * conforming to the multikey subtree. Not NULL only
@@ -143,6 +134,14 @@ struct tuple_field {
 	void *multikey_required_fields;
 	/** Link in tuple_format::fields. */
 	struct json_token token;
+	/**
+	 * Array of constraints. Can be NULL if constraints_count == 0.
+	 * Strings of constraints are allocated in the same memory block
+	 * right after the array.
+	 */
+	struct tuple_constraint *constraint;
+	/** Number of constraints. */
+	uint32_t constraint_count;
 };
 
 /**
@@ -152,10 +151,17 @@ struct tuple_field {
  * @retval boolean nullability attribute
  */
 static inline bool
-tuple_field_is_nullable(struct tuple_field *tuple_field)
+tuple_field_is_nullable(const struct tuple_field *tuple_field)
 {
 	return tuple_field->nullable_action == ON_CONFLICT_ACTION_NONE;
 }
+
+/**
+ * Return path to a tuple field. Used for error reporting.
+ */
+const char *
+tuple_field_path(const struct tuple_field *field,
+		 const struct tuple_format *format);
 
 /**
  * @brief Tuple format
@@ -196,6 +202,8 @@ struct tuple_format {
 	 * those are never altered. We can also reuse formats exported to Lua.
 	 */
 	bool is_reusable;
+	/** True if tuples of this format may contain compressed fields. */
+	bool is_compressed;
 	/**
 	 * Size of minimal field map of tuple where each indexed
 	 * field has own offset slot (in bytes). The real tuple
@@ -244,6 +252,14 @@ struct tuple_format {
 	 * tuple_field::token.
 	 */
 	struct json_tree fields;
+	/**
+	 * Array of constraints. Can be NULL if constraints_count == 0.
+	 * Strings of constraints are allocated in the same memory block
+	 * right after the array.
+	 */
+	struct tuple_constraint *constraint;
+	/** Number of constraints. */
+	uint32_t constraint_count;
 };
 
 /**
@@ -335,6 +351,8 @@ tuple_format_unref(struct tuple_format *format)
  * @param exact_field_count Exact field count for format.
  * @param is_temporary Set if format belongs to temporary space.
  * @param is_reusable Set if format may be reused.
+ * @param constraint_def - Array of constraint definitions.
+ * @param constraint_count - Number of constraints above.
  *
  * @retval not NULL Tuple format.
  * @retval     NULL Memory error.
@@ -345,7 +363,29 @@ tuple_format_new(struct tuple_format_vtab *vtab, void *engine,
 		 const struct field_def *space_fields,
 		 uint32_t space_field_count, uint32_t exact_field_count,
 		 struct tuple_dictionary *dict, bool is_temporary,
-		 bool is_reusable);
+		 bool is_reusable, struct tuple_constraint_def *constraint_def,
+		 uint32_t constraint_count);
+
+/**
+ * Check, if tuple @a format is compatible with @a key_def.
+ * This function return false and set diag in case when tuple
+ * @a format is not compatible with @a key_def.
+ */
+bool
+tuple_format_is_compatible_with_key_def(struct tuple_format *format,
+					struct key_def *key_def);
+
+/**
+ * Simple form of @sa tuple_format_create without the most of arguments.
+ * Omitted arguments are treated as 0/NULL/false depending on type.
+ */
+static inline struct tuple_format *
+simple_tuple_format_new(struct tuple_format_vtab *vtab, void *engine,
+			struct key_def * const *keys, uint16_t key_count)
+{
+	return tuple_format_new(vtab, engine, keys, key_count,
+				NULL, 0, 0, NULL, false, false, NULL, 0);
+}
 
 /**
  * Check, if @a format1 can store any tuples of @a format2. For
@@ -434,9 +474,8 @@ tuple_field_map_create(struct tuple_format *format, const char *tuple,
 
 /**
  * Initialize tuple format subsystem.
- * @retval 0 on success, -1 otherwise.
  */
-int
+void
 tuple_format_init();
 
 

@@ -75,6 +75,7 @@ t
   - atomic
   - backup
   - begin
+  - broadcast
   - cfg
   - commit
   - ctl
@@ -103,7 +104,9 @@ t
   - space
   - stat
   - tuple
+  - txn_id
   - unprepare
+  - watch
 ...
 t = nil
 ---

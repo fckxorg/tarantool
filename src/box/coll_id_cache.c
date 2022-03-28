@@ -38,23 +38,11 @@ static struct mh_strnptr_t *coll_cache_name = NULL;
 /** mhash table (id -> collation) */
 static struct mh_i32ptr_t *coll_id_cache = NULL;
 
-int
+void
 coll_id_cache_init(void)
 {
 	coll_id_cache = mh_i32ptr_new();
-	if (coll_id_cache == NULL) {
-		diag_set(OutOfMemory, sizeof(*coll_id_cache), "malloc",
-			 "coll_id_cache");
-		return -1;
-	}
 	coll_cache_name = mh_strnptr_new();
-	if (coll_cache_name == NULL) {
-		diag_set(OutOfMemory, sizeof(*coll_cache_name), "malloc",
-			 "coll_cache_name");
-		mh_i32ptr_delete(coll_id_cache);
-		return -1;
-	}
-	return 0;
 }
 
 void
@@ -70,26 +58,14 @@ coll_id_cache_replace(struct coll_id *coll_id, struct coll_id **replaced_id)
 	const struct mh_i32ptr_node_t id_node = {coll_id->id, coll_id};
 	struct mh_i32ptr_node_t repl_id_node = {0, NULL};
 	struct mh_i32ptr_node_t *prepl_id_node = &repl_id_node;
-	mh_int_t i =
-		mh_i32ptr_put(coll_id_cache, &id_node, &prepl_id_node, NULL);
-	if (i == mh_end(coll_id_cache)) {
-		diag_set(OutOfMemory, sizeof(id_node), "malloc",
-			 "coll_id_cache");
-		return -1;
-	}
+	mh_i32ptr_put(coll_id_cache, &id_node, &prepl_id_node, NULL);
 
 	uint32_t hash = mh_strn_hash(coll_id->name, coll_id->name_len);
 	const struct mh_strnptr_node_t name_node =
 		{ coll_id->name, coll_id->name_len, hash, coll_id };
 	struct mh_strnptr_node_t repl_name_node = { NULL, 0, 0, NULL };
 	struct mh_strnptr_node_t *prepl_node_name = &repl_name_node;
-	if (mh_strnptr_put(coll_cache_name, &name_node, &prepl_node_name,
-			   NULL) == mh_end(coll_id_cache)) {
-		diag_set(OutOfMemory, sizeof(name_node), "malloc",
-			 "coll_cache_name");
-		mh_i32ptr_del(coll_id_cache, i, NULL);
-		return -1;
-	}
+	mh_strnptr_put(coll_cache_name, &name_node, &prepl_node_name, NULL);
 	assert(repl_id_node.val == repl_name_node.val);
 	assert(repl_id_node.val == NULL);
 	*replaced_id = repl_id_node.val;
@@ -101,7 +77,7 @@ coll_id_cache_delete(const struct coll_id *coll_id)
 {
 	mh_int_t id_i = mh_i32ptr_find(coll_id_cache, coll_id->id, NULL);
 	mh_i32ptr_del(coll_id_cache, id_i, NULL);
-	mh_int_t name_i = mh_strnptr_find_inp(coll_cache_name, coll_id->name,
+	mh_int_t name_i = mh_strnptr_find_str(coll_cache_name, coll_id->name,
 					      coll_id->name_len);
 	mh_strnptr_del(coll_cache_name, name_i, NULL);
 }
@@ -121,7 +97,7 @@ coll_by_id(uint32_t id)
 struct coll_id *
 coll_by_name(const char *name, uint32_t len)
 {
-	mh_int_t pos = mh_strnptr_find_inp(coll_cache_name, name, len);
+	mh_int_t pos = mh_strnptr_find_str(coll_cache_name, name, len);
 	if (pos == mh_end(coll_cache_name))
 		return NULL;
 	return mh_strnptr_node(coll_cache_name, pos)->val;

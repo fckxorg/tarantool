@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 local test = require("sqltester")
-test:plan(35)
+test:plan(33)
 
 --!./tcltestrunner.lua
 -- 2010 August 27
@@ -28,7 +28,7 @@ test:plan(35)
 test:do_execsql_test(
     "func3-5.1",
     [[
-        SELECT likelihood(9223372036854775807, 0.5);
+        SELECT likelihood(9223372036854775807, 0.5e0);
     ]], {
         -- <func3-5.1>
         9223372036854775807LL
@@ -38,7 +38,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.2",
     [[
-        SELECT likelihood(-9223372036854775808, 0.5);
+        SELECT likelihood(-9223372036854775808, 0.5e0);
     ]], {
         -- <func3-5.2>
         -9223372036854775808LL
@@ -48,7 +48,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.3",
     [[
-        SELECT likelihood(14.125, 0.5);
+        SELECT likelihood(14.125e0, 0.5e0);
     ]], {
         -- <func3-5.3>
         14.125
@@ -58,7 +58,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.4",
     [[
-        SELECT likelihood(NULL, 0.5);
+        SELECT likelihood(NULL, 0.5e0);
     ]], {
         -- <func3-5.4>
         ""
@@ -68,7 +68,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.5",
     [[
-        SELECT likelihood('test-string', 0.5);
+        SELECT likelihood('test-string', 0.5e0);
     ]], {
         -- <func3-5.5>
         "test-string"
@@ -78,7 +78,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.6",
     [[
-        SELECT quote(likelihood(x'010203000405', 0.5));
+        SELECT quote(likelihood(x'010203000405', 0.5e0));
     ]], {
         -- <func3-5.6>
         "X'010203000405'"
@@ -91,7 +91,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.7",
     [[
-        SELECT likelihood(123, 1.0), likelihood(456, 0.0);
+        SELECT likelihood(123, 1e0), likelihood(456, 0e0);
     ]], {
         -- <func3-5.7>
         123, 456
@@ -101,7 +101,7 @@ test:do_execsql_test(
 test:do_catchsql_test(
     "func3-5.8",
     [[
-        SELECT likelihood(123, 1.000001);
+        SELECT likelihood(123, 1.000001e0);
     ]], {
         -- <func3-5.8>
         1, "Illegal parameters, second argument to likelihood() must be a constant between 0.0 and 1.0"
@@ -111,7 +111,7 @@ test:do_catchsql_test(
 test:do_catchsql_test(
     "func3-5.9",
     [[
-        SELECT likelihood(123, -0.000001);
+        SELECT likelihood(123, -0.000001e0);
     ]], {
         -- <func3-5.9>
         1, "Illegal parameters, second argument to likelihood() must be a constant between 0.0 and 1.0"
@@ -121,7 +121,7 @@ test:do_catchsql_test(
 test:do_catchsql_test(
     "func3-5.10",
     [[
-        SELECT likelihood(123, 0.5+0.3);
+        SELECT likelihood(123, 0.5e0 + 0.3e0);
     ]], {
         -- <func3-5.10>
         1, "Illegal parameters, second argument to likelihood() must be a constant between 0.0 and 1.0"
@@ -135,7 +135,7 @@ test:do_catchsql_test(
 test:do_test(
     "func3-5.20",
     function()
-        return test:execsql "EXPLAIN SELECT likelihood(LEAST(1.0+'2.0',4*11), 0.5)"
+        return test:execsql "EXPLAIN SELECT likelihood(LEAST(1.0+'2.0',4*11), 0.5e0)"
     end, test:execsql("EXPLAIN SELECT LEAST(1.0+'2.0',4*11)"))
 
 -- EVIDENCE-OF: R-11152-23456 The unlikely(X) function returns the
@@ -164,7 +164,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.32",
     [[
-        SELECT unlikely(14.125);
+        SELECT unlikely(14.125e0);
     ]], {
         -- <func3-5.32>
         14.125
@@ -237,7 +237,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func3-5.52",
     [[
-        SELECT likely(14.125);
+        SELECT likely(14.125e0);
     ]], {
         -- <func3-5.52>
         14.125
@@ -294,11 +294,9 @@ suits[2] = {str = '\x80', len = 1}
 suits[3] = {str = '\x61\x62\x63', len = 3}
 suits[4] = {str = '\x7f\x80\x81', len = 3}
 suits[5] = {str = '\x61\xc0', len = 2}
-suits[6] = {str = '\x61\xc0\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80', len = 12}
-suits[7] = {str = '\xc0\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80', len = 11}
-suits[8] = {str = '\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80', len = 10}
-suits[9] = {str = '\x80\x80\x80\x80\x80\xf0\x80\x80\x80\x80', len = 7}
-suits[10] = {str = '\x80\x80\x80\x80\x80\xf0\x80\x80\x80\xff', len = 7}
+suits[6] = {str = '\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80', len = 10}
+suits[7] = {str = '\x80\x80\x80\x80\x80\xf0\x90\x80\x80\x80', len = 7}
+suits[8] = {str = '\x80\x80\x80\x80\x80\xf0\x90\x80\x80\xff', len = 7}
 
 for k,v in pairs(suits) do
     test:do_execsql_test(

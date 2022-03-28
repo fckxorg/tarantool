@@ -200,13 +200,11 @@ box.schema.func.reload("reload")
 _ = fiber.create(function() ch:put(c:call("reload.test_reload")) end)
 ---
 ...
-ch:get()
+_ = ch:get()
 ---
-- [[1]]
 ...
-ch:get()
+_ = ch:get()
 ---
-- [[2]]
 ...
 s:drop()
 ---
@@ -249,9 +247,9 @@ os.setenv("TMPDIR", "/dev/null")
 _, err = pcall(box.schema.func.reload, "reload")
 ---
 ...
-tostring(err):gsub(': [/%w]+$', '')
+tostring(err):gsub(': [/%w]+:', ':')
 ---
-- failed to create unique dir name
+- 'failed to create unique dir name: Not a directory'
 - 1
 ...
 os.setenv("TMPDIR", nil)

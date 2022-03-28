@@ -393,11 +393,7 @@ coll_new(const struct coll_def *def)
 	}
 
 	struct mh_coll_node_t node = { fingerprint_len, hash, coll };
-	if (mh_coll_put(coll_cache, &node, NULL, NULL) == mh_end(coll_cache)) {
-		diag_set(OutOfMemory, sizeof(node), "malloc", "coll_cache");
-		coll_unref(coll);
-		return NULL;
-	}
+	mh_coll_put(coll_cache, &node, NULL, NULL);
 	return coll;
 }
 
@@ -423,8 +419,7 @@ coll_init(void)
 	coll_cache = mh_coll_new();
 	icu_ucase_default_map = ucasemap_open("", 0, &err);
 	icu_utf8_conv = ucnv_open("utf8", &err);
-	if (coll_cache == NULL || icu_ucase_default_map == NULL ||
-	    icu_utf8_conv == NULL)
+	if (icu_ucase_default_map == NULL || icu_utf8_conv == NULL)
 		panic("Can not create system collations cache");
 }
 

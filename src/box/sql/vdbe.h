@@ -97,6 +97,8 @@ struct VdbeOp {
 		 * Information about ephemeral space field types and key parts.
 		 */
 		struct sql_space_info *space_info;
+		/** P4 contains address of decimal. */
+		decimal_t *dec;
 	} p4;
 #ifdef SQL_ENABLE_EXPLAIN_COMMENTS
 	char *zComment;		/* Comment to improve readability */
@@ -132,6 +134,8 @@ struct SubProgram {
 #define P4_COLLSEQ  (-3)	/* P4 is a pointer to a CollSeq structure */
 /** P4 is a pointer to a func structure. */
 #define P4_FUNC     (-4)
+/** P4 is a pointer to a decimal. */
+#define P4_DEC      (-5)
 #define P4_MEM      (-7)	/* P4 is a pointer to a Mem*    structure */
 #define P4_TRANSIENT  0		/* P4 is a pointer to a transient string */
 #define P4_REAL     (-9)	/* P4 is a 64-bit floating point value */
@@ -256,12 +260,17 @@ vdbe_metadata_set_col_autoincrement(struct Vdbe *p, int idx);
 int
 vdbe_metadata_set_col_span(struct Vdbe *p, int idx, const char *span);
 
+const struct Mem *
+vdbe_get_bound_value(struct Vdbe *vdbe, int id);
+
 void sqlVdbeCountChanges(Vdbe *);
 sql *sqlVdbeDb(Vdbe *);
 void sqlVdbeSetSql(Vdbe *, const char *z, int n);
 void sqlVdbeSwap(Vdbe *, Vdbe *);
-VdbeOp *sqlVdbeTakeOpArray(Vdbe *, int *, int *);
-sql_value *sqlVdbeGetBoundValue(Vdbe *, int);
+
+struct VdbeOp *
+sqlVdbeTakeOpArray(struct Vdbe *p, int *pnOp);
+
 char *sqlVdbeExpandSql(Vdbe *, const char *);
 
 /**

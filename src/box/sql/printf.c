@@ -144,7 +144,7 @@ getIntArg(PrintfArguments * p)
 {
 	if (p->nArg <= p->nUsed)
 		return 0;
-	return mem_get_int_unsafe(p->apArg[p->nUsed++]);
+	return mem_get_int_unsafe(&p->apArg[p->nUsed++]);
 }
 
 static double
@@ -152,7 +152,7 @@ getDoubleArg(PrintfArguments * p)
 {
 	if (p->nArg <= p->nUsed)
 		return 0.0;
-	return mem_get_double_unsafe(p->apArg[p->nUsed++]);
+	return mem_get_double_unsafe(&p->apArg[p->nUsed++]);
 }
 
 static char *
@@ -160,8 +160,7 @@ getTextArg(PrintfArguments * p)
 {
 	if (p->nArg <= p->nUsed)
 		return 0;
-	struct Mem *mem = p->apArg[p->nUsed++];
-	return (char *)mem_as_str0(mem);
+	return mem_strdup(&p->apArg[p->nUsed++]);
 }
 
 /*
@@ -677,6 +676,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 			if (bArgList) {
 				bufpt = getTextArg(pArgList);
 				c = bufpt ? bufpt[0] : 0;
+				zExtra = bufpt;
 			} else {
 				c = va_arg(ap, int);
 			}
@@ -697,7 +697,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 		case etDYNSTRING:
 			if (bArgList) {
 				bufpt = getTextArg(pArgList);
-				xtype = etSTRING;
+				xtype = etDYNSTRING;
 			} else {
 				bufpt = va_arg(ap, char *);
 			}
@@ -727,6 +727,7 @@ sqlVXPrintf(StrAccum * pAccum,	/* Accumulate results here */
 
 				if (bArgList) {
 					escarg = getTextArg(pArgList);
+					zExtra = escarg;
 				} else {
 					escarg = va_arg(ap, char *);
 				}

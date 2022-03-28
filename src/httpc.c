@@ -75,6 +75,20 @@ curl_easy_header_cb(char *buffer, size_t size, size_t nitems, void *ctx)
 {
 	struct httpc_request *req = (struct httpc_request *) ctx;
 	const size_t bytes = size * nitems;
+	/*
+	 * The callback is invoked for the headers of all responses received
+	 * after initiating a request and not just the final response. Since
+	 * we're only interested in the final response headers, we drop all
+	 * accumulated headers on each redirect.
+	 */
+	long redirect_count;
+	curl_easy_getinfo(req->curl_request.easy, CURLINFO_REDIRECT_COUNT,
+			  &redirect_count);
+	if (redirect_count > req->redirect_count) {
+		assert(redirect_count == req->redirect_count + 1);
+		req->redirect_count = redirect_count;
+		region_reset(&req->resp_headers);
+	}
 	char *p = region_alloc(&req->resp_headers, bytes);
 	if (p == NULL) {
 		diag_set(OutOfMemory, bytes, "ibuf", "httpc header");
@@ -155,8 +169,6 @@ httpc_request_new(struct httpc_env *env, const char *method,
 	curl_easy_setopt(req->curl_request.easy, CURLOPT_HEADERFUNCTION,
 			 curl_easy_header_cb);
 	curl_easy_setopt(req->curl_request.easy, CURLOPT_NOPROGRESS, 1L);
-	curl_easy_setopt(req->curl_request.easy, CURLOPT_HTTP_VERSION,
-			 CURL_HTTP_VERSION_1_1);
 
 	ibuf_create(&req->body, &cord()->slabc, 1);
 

@@ -48,7 +48,7 @@ struct port;
 struct request;
 struct xrow_header;
 struct obuf;
-struct ev_io;
+struct iostream;
 struct auth_request;
 struct space;
 struct vclock;
@@ -69,6 +69,12 @@ extern double on_shutdown_trigger_timeout;
 
 /** Invoked on box shutdown. */
 extern struct rlist box_on_shutdown_trigger_list;
+
+/**
+ * Timeout during which the transaction must complete,
+ * otherwise it will be rolled back.
+ */
+extern double txn_timeout_default;
 
 /*
  * Initialize box library
@@ -147,6 +153,13 @@ void
 box_update_ro_summary(void);
 
 /**
+ * Get the reason why the instance is read only if it is. Can't be called on a
+ * writable instance.
+ */
+const char *
+box_ro_reason(void);
+
+/**
  * Iterate over all spaces and save them to the
  * snapshot file.
  */
@@ -193,33 +206,34 @@ box_process_auth(struct auth_request *request, const char *salt);
 
 /** Send current read view to the replica. */
 void
-box_process_fetch_snapshot(struct ev_io *io, struct xrow_header *header);
+box_process_fetch_snapshot(struct iostream *io,
+			   const struct xrow_header *header);
 
 /** Register a replica */
 void
-box_process_register(struct ev_io *io, struct xrow_header *header);
+box_process_register(struct iostream *io, const struct xrow_header *header);
 
 /**
  * Join a replica.
  *
  * Register a replica and feed it with data.
  *
- * \param io coio watcher (initialized with coio_create())
+ * \param io I/O stream
  * \param JOIN packet header
  */
 void
-box_process_join(struct ev_io *io, struct xrow_header *header);
+box_process_join(struct iostream *io, const struct xrow_header *header);
 
 /**
  * Subscribe a replica.
  *
  * Perform necessary checks and start a relay thread.
  *
- * \param io coio watcher (initialized with coio_create())
+ * \param io I/O stream
  * \param SUBSCRIBE packet header
  */
 void
-box_process_subscribe(struct ev_io *io, struct xrow_header *header);
+box_process_subscribe(struct iostream *io, const struct xrow_header *header);
 
 void
 box_process_vote(struct ballot *ballot);
@@ -264,6 +278,7 @@ void box_set_replication_skip_conflict(void);
 void box_set_replication_anon(void);
 void box_set_net_msg_max(void);
 int box_set_crash(void);
+int box_set_txn_timeout(void);
 
 int
 box_set_prepared_stmt_cache_size(void);

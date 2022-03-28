@@ -15,27 +15,41 @@ local cord_ibuf_drop = buffer.internal.cord_ibuf_drop
 
 ffi.cdef([[
 char *
-mp_encode_float(char *data, float num);
+tnt_mp_encode_float(char *data, float num);
 char *
-mp_encode_double(char *data, double num);
+tnt_mp_encode_double(char *data, double num);
 char *
-mp_encode_decimal(char *data, decimal_t *dec);
+tnt_mp_encode_decimal(char *data, decimal_t *dec);
 uint32_t
-mp_sizeof_decimal(const decimal_t *dec);
+tnt_mp_sizeof_decimal(const decimal_t *dec);
 char *
-mp_encode_uuid(char *data, const struct tt_uuid *uuid);
+tnt_mp_encode_uuid(char *data, const struct tt_uuid *uuid);
 uint32_t
-mp_sizeof_uuid();
+tnt_mp_sizeof_uuid();
+uint32_t
+tnt_mp_sizeof_error(const struct error *error);
+char *
+tnt_mp_encode_error(char *data, const struct error *error);
+uint32_t
+tnt_mp_sizeof_datetime(const struct datetime *date);
+char *
+tnt_mp_encode_datetime(char *data, const struct datetime *date);
 float
-mp_decode_float(const char **data);
+tnt_mp_decode_float(const char **data);
 double
-mp_decode_double(const char **data);
+tnt_mp_decode_double(const char **data);
 uint32_t
-mp_decode_extl(const char **data, int8_t *type);
+tnt_mp_decode_extl(const char **data, int8_t *type);
 decimal_t *
 decimal_unpack(const char **data, uint32_t len, decimal_t *dec);
 struct tt_uuid *
 uuid_unpack(const char **data, uint32_t len, struct tt_uuid *uuid);
+struct error *
+error_unpack_unsafe(const char **data);
+void
+error_unref(struct error *e);
+struct datetime *
+tnt_datetime_unpack(const char **data, uint32_t len, struct datetime *date);
 ]])
 
 local strict_alignment = (jit.arch == 'arm')
@@ -124,22 +138,27 @@ end
 
 local function encode_float(buf, num)
     local p = buf:alloc(5)
-    builtin.mp_encode_float(p, num)
+    builtin.tnt_mp_encode_float(p, num)
 end
 
 local function encode_double(buf, num)
     local p = buf:alloc(9)
-    builtin.mp_encode_double(p, num)
+    builtin.tnt_mp_encode_double(p, num)
 end
 
 local function encode_decimal(buf, num)
-    local p = buf:alloc(builtin.mp_sizeof_decimal(num))
-    builtin.mp_encode_decimal(p, num)
+    local p = buf:alloc(builtin.tnt_mp_sizeof_decimal(num))
+    builtin.tnt_mp_encode_decimal(p, num)
 end
 
 local function encode_uuid(buf, uuid)
-    local p = buf:alloc(builtin.mp_sizeof_uuid())
-    builtin.mp_encode_uuid(p, uuid)
+    local p = buf:alloc(builtin.tnt_mp_sizeof_uuid())
+    builtin.tnt_mp_encode_uuid(p, uuid)
+end
+
+local function encode_datetime(buf, date)
+    local p = buf:alloc(builtin.tnt_mp_sizeof_datetime(date))
+    builtin.tnt_mp_encode_datetime(p, date)
 end
 
 local function encode_int(buf, num)
@@ -217,6 +236,15 @@ end
 local function encode_nil(buf)
     local p = buf:alloc(1)
     p[0] = 0xc0
+end
+
+local function encode_error(buf, err)
+    if msgpack.cfg.encode_error_as_ext then
+        local p = buf:alloc(builtin.tnt_mp_sizeof_error(err))
+        builtin.tnt_mp_encode_error(p, err)
+    else
+        encode_str(buf, err.message)
+    end
 end
 
 local function encode_r(buf, obj, level)
@@ -320,6 +348,8 @@ on_encode(ffi.typeof('float'), encode_float)
 on_encode(ffi.typeof('double'), encode_double)
 on_encode(ffi.typeof('decimal_t'), encode_decimal)
 on_encode(ffi.typeof('struct tt_uuid'), encode_uuid)
+on_encode(ffi.typeof('const struct error &'), encode_error)
+on_encode(ffi.typeof('struct datetime'), encode_datetime)
 
 --------------------------------------------------------------------------------
 -- Decoder
@@ -461,13 +491,13 @@ else
 end
 
 local function decode_float(data)
-    data[0] = data[0] - 1 -- mp_decode_float need type code
-    return tonumber(builtin.mp_decode_float(data))
+    data[0] = data[0] - 1 -- tnt_mp_decode_float need type code
+    return tonumber(builtin.tnt_mp_decode_float(data))
 end
 
 local function decode_double(data)
-    data[0] = data[0] - 1 -- mp_decode_double need type code
-    return tonumber(builtin.mp_decode_double(data))
+    data[0] = data[0] - 1 -- tnt_mp_decode_double need type code
+    return tonumber(builtin.tnt_mp_decode_double(data))
 end
 
 local function decode_str(data, size)
@@ -513,14 +543,34 @@ local ext_decoder = {
         builtin.uuid_unpack(data, len, uuid)
         return uuid
     end,
+    -- MP_ERROR
+    [3] = function(data)
+        local err = builtin.error_unpack_unsafe(data)
+        if err ~= nil then
+            err._refs = err._refs + 1
+            -- From FFI it is returned as 'struct error *', which is
+            -- not considered equal to 'const struct error &', and is
+            -- is not accepted by functions like box.error(). Need to
+            -- cast explicitly.
+            err = ffi.cast('const struct error &', err)
+            err = ffi.gc(err, builtin.error_unref)
+        end
+        return err
+    end,
+    -- MP_DATETIME
+    [4] = function(data, len)
+        local dt = ffi.new("struct datetime")
+        builtin.tnt_datetime_unpack(data, len, dt)
+        return dt
+    end,
 }
 
 local function decode_ext(data)
     local t = ffi.new("int8_t[1]")
-    -- mp_decode_extl and mp_decode_decimal
+    -- tnt_mp_decode_extl and tnt_mp_decode_decimal
     -- need type code
     data[0] = data[0] - 1
-    local len = builtin.mp_decode_extl(data, t)
+    local len = builtin.tnt_mp_decode_extl(data, t)
     local fun = ext_decoder[t[0]]
     if type(fun) == 'function' then
         return fun(data, len)

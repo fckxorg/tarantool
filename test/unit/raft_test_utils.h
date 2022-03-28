@@ -32,6 +32,7 @@
 #include "fakesys/fakeev.h"
 #include "fiber.h"
 #include "raft/raft.h"
+#include "raft/raft_ev.h"
 #include "unit.h"
 
 /** WAL simulation. It stores a list of rows which raft wanted to persist. */
@@ -104,7 +105,9 @@ struct raft_node {
 	double cfg_election_timeout;
 	int cfg_election_quorum;
 	double cfg_death_timeout;
+	double cfg_max_shift;
 	uint32_t cfg_instance_id;
+	int cfg_cluster_size;
 	struct vclock *cfg_vclock;
 };
 
@@ -200,6 +203,14 @@ raft_node_stop(struct raft_node *node);
 void
 raft_node_start(struct raft_node *node);
 
+/** Start the node but not configure it yet. Only recover. */
+void
+raft_node_recover(struct raft_node *node);
+
+/** Apply the entire Raft config to a started node. */
+void
+raft_node_cfg(struct raft_node *node);
+
 /** Block async work execution. */
 void
 raft_node_block(struct raft_node *node);
@@ -228,6 +239,9 @@ void
 raft_node_cfg_is_candidate(struct raft_node *node, bool value);
 
 void
+raft_node_cfg_cluster_size(struct raft_node *node, int value);
+
+void
 raft_node_cfg_election_timeout(struct raft_node *node, double value);
 
 void
@@ -235,6 +249,9 @@ raft_node_cfg_election_quorum(struct raft_node *node, int value);
 
 void
 raft_node_cfg_death_timeout(struct raft_node *node, double value);
+
+void
+raft_node_cfg_max_shift(struct raft_node *node, double value);
 
 /** Check that @a msg message matches the given arguments. */
 bool

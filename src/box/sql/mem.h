@@ -30,8 +30,9 @@
  * SUCH DAMAGE.
  */
 #include "box/field_def.h"
-#include "uuid/tt_uuid.h"
+#include "datetime.h"
 #include "decimal.h"
+#include "tt_uuid.h"
 
 struct sql;
 struct Vdbe;
@@ -51,10 +52,10 @@ enum mem_type {
 	MEM_TYPE_DOUBLE		= 1 << 8,
 	MEM_TYPE_UUID		= 1 << 9,
 	MEM_TYPE_DEC		= 1 << 10,
-	MEM_TYPE_INVALID	= 1 << 11,
-	MEM_TYPE_FRAME		= 1 << 12,
-	MEM_TYPE_PTR		= 1 << 13,
-	MEM_TYPE_AGG		= 1 << 14,
+	MEM_TYPE_DATETIME	= 1 << 11,
+	MEM_TYPE_INVALID	= 1 << 12,
+	MEM_TYPE_FRAME		= 1 << 13,
+	MEM_TYPE_PTR		= 1 << 14,
 };
 
 /*
@@ -68,7 +69,6 @@ struct Mem {
 		i64 i;		/* Integer value used when MEM_Int is set in flags */
 		uint64_t u;	/* Unsigned integer used when MEM_UInt is set. */
 		bool b;         /* Boolean value used when MEM_Bool is set in flags */
-		int nZero;	/* Used when bit MEM_Zero is set in flags */
 		void *p;	/* Generic pointer */
 		/**
 		 * A pointer to function implementation.
@@ -78,6 +78,8 @@ struct Mem {
 		struct VdbeFrame *pFrame;	/* Used when flags==MEM_Frame */
 		struct tt_uuid uuid;
 		decimal_t d;
+		/** DATETIME value. */
+		struct datetime dt;
 	} u;
 	/** Type of the value this MEM contains. */
 	enum mem_type type;
@@ -89,7 +91,6 @@ struct Mem {
 	int szMalloc;		/* Size of the zMalloc allocation */
 	u32 uTemp;		/* Transient storage for serial_type in OP_MakeRecord */
 	sql *db;		/* The associated database connection */
-	void (*xDel) (void *);	/* Destructor for Mem.z - only valid if MEM_Dyn */
 #ifdef SQL_DEBUG
 	Mem *pScopyFrom;	/* This Mem is a shallow copy of pScopyFrom */
 	void *pFiller;		/* So that sizeof(Mem) is a multiple of 8 */
@@ -100,18 +101,11 @@ struct Mem {
 #define MEM_Number    0x0001
 /** MEM is of SCALAR meta-type. */
 #define MEM_Scalar    0x0002
+/** MEM is of ANY meta-type. */
+#define MEM_Any       0x0004
 #define MEM_Cleared   0x0200	/* NULL set by OP_Null, not from data */
-
-/* Whenever Mem contains a valid string or blob representation, one of
- * the following flags must be set to determine the memory management
- * policy for Mem.z.  The MEM_Term flag tells us whether or not the
- * string is \000 or \u0000 terminated
- */
-#define MEM_Term      0x0400	/* String rep is nul terminated */
-#define MEM_Dyn       0x0800	/* Need to call Mem.xDel() on Mem.z */
 #define MEM_Static    0x1000	/* Mem.z points to a static string */
 #define MEM_Ephem     0x2000	/* Mem.z points to an ephemeral string */
-#define MEM_Zero      0x8000	/* Mem.i contains count of 0s appended to blob */
 
 static inline bool
 mem_is_null(const struct Mem *mem)
@@ -148,13 +142,19 @@ mem_is_num(const struct Mem *mem)
 static inline bool
 mem_is_metatype(const struct Mem *mem)
 {
-	return (mem->flags & (MEM_Number | MEM_Scalar)) != 0;
+	return (mem->flags & (MEM_Number | MEM_Scalar | MEM_Any)) != 0;
 }
 
 static inline bool
 mem_is_double(const struct Mem *mem)
 {
 	return mem->type == MEM_TYPE_DOUBLE;
+}
+
+static inline bool
+mem_is_dec(const struct Mem *mem)
+{
+	return mem->type == MEM_TYPE_DEC;
 }
 
 static inline bool
@@ -185,12 +185,6 @@ static inline bool
 mem_is_array(const struct Mem *mem)
 {
 	return mem->type == MEM_TYPE_ARRAY;
-}
-
-static inline bool
-mem_is_agg(const struct Mem *mem)
-{
-	return mem->type == MEM_TYPE_AGG;
 }
 
 static inline bool
@@ -227,16 +221,16 @@ mem_is_ephemeral(const struct Mem *mem)
 }
 
 static inline bool
-mem_is_dynamic(const struct Mem *mem)
-{
-	assert(mem_is_bytes(mem));
-	return (mem->flags & MEM_Dyn) != 0;
-}
-
-static inline bool
 mem_is_allocated(const struct Mem *mem)
 {
 	return mem_is_bytes(mem) && mem->z == mem->zMalloc;
+}
+
+/** Return TRUE if MEM does not need to be freed or destroyed. */
+static inline bool
+mem_is_trivial(const struct Mem *mem)
+{
+	return mem->szMalloc == 0 && mem->type != MEM_TYPE_FRAME;
 }
 
 static inline bool
@@ -244,13 +238,6 @@ mem_is_cleared(const struct Mem *mem)
 {
 	assert((mem->flags & MEM_Cleared) == 0 || mem->type == MEM_TYPE_NULL);
 	return (mem->flags & MEM_Cleared) != 0;
-}
-
-static inline bool
-mem_is_zerobin(const struct Mem *mem)
-{
-	assert((mem->flags & MEM_Zero) == 0 || mem->type == MEM_TYPE_BIN);
-	return (mem->flags & MEM_Zero) != 0;
 }
 
 static inline bool
@@ -268,6 +255,21 @@ mem_is_any_null(const struct Mem *mem1, const struct Mem *mem2)
 /** Check if MEM is compatible with field type. */
 bool
 mem_is_field_compatible(const struct Mem *mem, enum field_type type);
+
+/**
+ * Write a NULL-terminated string representation of a MEM to buf. Returns the
+ * number of bytes required to write the value, excluding '\0'. If the return
+ * value is equal to or greater than size, then the value has been truncated.
+ */
+int
+mem_snprintf(char *buf, uint32_t size, const struct Mem *mem);
+
+/**
+ * Returns a NULL-terminated string representation of a MEM. Memory for the
+ * result was allocated using sqlDbMallocRawNN() and should be freed.
+ */
+char *
+mem_strdup(const struct Mem *mem);
 
 /**
  * Return a string that contains description of type and value of MEM. String is
@@ -314,6 +316,10 @@ mem_set_uuid(struct Mem *mem, const struct tt_uuid *uuid);
 void
 mem_set_dec(struct Mem *mem, const decimal_t *dec);
 
+/** Clear MEM and set it to DATETIME. */
+void
+mem_set_datetime(struct Mem *mem, const struct datetime *dt);
+
 /** Clear MEM and set it to STRING. The string belongs to another object. */
 void
 mem_set_str_ephemeral(struct Mem *mem, char *value, uint32_t len);
@@ -321,14 +327,6 @@ mem_set_str_ephemeral(struct Mem *mem, char *value, uint32_t len);
 /** Clear MEM and set it to STRING. The string is static. */
 void
 mem_set_str_static(struct Mem *mem, char *value, uint32_t len);
-
-/**
- * Clear MEM and set it to STRING. The string was allocated by another object
- * and passed to MEM. MEMs with this allocation type must free given memory
- * whenever the MEM changes.
- */
-void
-mem_set_str_dynamic(struct Mem *mem, char *value, uint32_t len);
 
 /**
  * Clear MEM and set it to STRING. The string was allocated by another object
@@ -352,68 +350,12 @@ mem_set_str0_static(struct Mem *mem, char *value);
 
 /**
  * Clear MEM and set it to NULL-terminated STRING. The string was allocated by
- * another object and passed to MEM. MEMs with this allocation type must free
- * given memory whenever the MEM changes.
- */
-void
-mem_set_str0_dynamic(struct Mem *mem, char *value);
-
-/**
- * Clear MEM and set it to NULL-terminated STRING. The string was allocated by
  * another object and passed to MEM. MEMs with this allocation type only
  * deallocate the string on destruction. Also, the memory may be reallocated if
  * MEM is set to a different value of this allocation type.
  */
 void
 mem_set_str0_allocated(struct Mem *mem, char *value);
-
-static inline void
-mem_set_strl_ephemeral(struct Mem *mem, char *value, int len_hint)
-{
-	if (len_hint < 0)
-		mem_set_str0_ephemeral(mem, value);
-	else
-		mem_set_str_ephemeral(mem, value, len_hint);
-}
-
-static inline void
-mem_set_strl_static(struct Mem *mem, char *value, int len_hint)
-{
-	if (len_hint < 0)
-		mem_set_str0_static(mem, value);
-	else
-		mem_set_str_static(mem, value, len_hint);
-}
-
-static inline void
-mem_set_strl_dynamic(struct Mem *mem, char *value, int len_hint)
-{
-	if (len_hint < 0)
-		mem_set_str0_dynamic(mem, value);
-	else
-		mem_set_str_dynamic(mem, value, len_hint);
-}
-
-static inline void
-mem_set_strl_allocated(struct Mem *mem, char *value, int len_hint)
-{
-	if (len_hint < 0)
-		mem_set_str0_allocated(mem, value);
-	else
-		mem_set_str_allocated(mem, value, len_hint);
-}
-
-static inline void
-mem_set_strl(struct Mem *mem, char *value, int len_hint,
-	     void (*custom_free)(void *))
-{
-	if (custom_free == SQL_STATIC)
-		return mem_set_strl_static(mem, value, len_hint);
-	if (custom_free == SQL_DYNAMIC)
-		return mem_set_strl_allocated(mem, value, len_hint);
-	if (custom_free != SQL_TRANSIENT)
-		return mem_set_strl_dynamic(mem, value, len_hint);
-}
 
 /** Copy string to a newly allocated memory. The MEM type becomes STRING. */
 int
@@ -425,14 +367,6 @@ mem_copy_str(struct Mem *mem, const char *value, uint32_t len);
  */
 int
 mem_copy_str0(struct Mem *mem, const char *value);
-
-static inline int
-mem_copy_strl(struct Mem *mem, const char *value, int len_hint)
-{
-	if (len_hint < 0)
-		return mem_copy_str0(mem, value);
-	return mem_copy_str(mem, value, len_hint);
-}
 
 /**
  * Clear MEM and set it to VARBINARY. The binary value belongs to another
@@ -447,38 +381,12 @@ mem_set_bin_static(struct Mem *mem, char *value, uint32_t size);
 
 /**
  * Clear MEM and set it to VARBINARY. The binary value was allocated by another
- * object and passed to MEM. MEMs with this allocation type must free given
- * memory whenever the MEM changes.
- */
-void
-mem_set_bin_dynamic(struct Mem *mem, char *value, uint32_t size);
-
-/**
- * Clear MEM and set it to VARBINARY. The binary value was allocated by another
  * object and passed to MEM. MEMs with this allocation type only deallocate the
  * string on destruction. Also, the memory may be reallocated if MEM is set to a
  * different value of this allocation type.
  */
 void
 mem_set_bin_allocated(struct Mem *mem, char *value, uint32_t size);
-
-static inline void
-mem_set_binl(struct Mem *mem, char *value, uint32_t size,
-	     void (*custom_free)(void *))
-{
-	if (custom_free == SQL_STATIC)
-		return mem_set_bin_static(mem, value, size);
-	if (custom_free == SQL_DYNAMIC)
-		return mem_set_bin_allocated(mem, value, size);
-	if (custom_free != SQL_TRANSIENT)
-		return mem_set_bin_dynamic(mem, value, size);
-}
-
-/**
- * Clear MEM and set it to VARBINARY. The binary value consist of n zero bytes.
- */
-void
-mem_set_zerobin(struct Mem *mem, int n);
 
 /**
  * Copy binary value to a newly allocated memory. The MEM type becomes
@@ -504,20 +412,16 @@ mem_set_map_static(struct Mem *mem, char *value, uint32_t size);
 /**
  * Clear MEM and set it to MAP. The binary value was allocated by another object
  * and passed to MEM. The binary value must be msgpack of MAP type. MEMs with
- * this allocation type must free given memory whenever the MEM changes.
- */
-void
-mem_set_map_dynamic(struct Mem *mem, char *value, uint32_t size);
-
-/**
- * Clear MEM and set it to MAP. The binary value was allocated by another object
- * and passed to MEM. The binary value must be msgpack of MAP type. MEMs with
  * this allocation type only deallocate the string on destruction. Also, the
  * memory may be reallocated if MEM is set to a different value of this
  * allocation type.
  */
 void
 mem_set_map_allocated(struct Mem *mem, char *value, uint32_t size);
+
+/** Copy MAP value to a newly allocated memory. The MEM type becomes MAP. */
+int
+mem_copy_map(struct Mem *mem, const char *value, uint32_t size);
 
 /**
  * Clear MEM and set it to ARRAY. The binary value belongs to another object.
@@ -536,21 +440,16 @@ mem_set_array_static(struct Mem *mem, char *value, uint32_t size);
 /**
  * Clear MEM and set it to ARRAY. The binary value was allocated by another
  * object and passed to MEM. The binary value must be msgpack of ARRAY type.
- * MEMs with this allocation type must free given memory whenever the MEM
- * changes.
- */
-void
-mem_set_array_dynamic(struct Mem *mem, char *value, uint32_t size);
-
-/**
- * Clear MEM and set it to ARRAY. The binary value was allocated by another
- * object and passed to MEM. The binary value must be msgpack of ARRAY type.
  * MEMs with this allocation type only deallocate the string on destruction.
  * Also, the memory may be reallocated if MEM is set to a different value of
  * this allocation type.
  */
 void
 mem_set_array_allocated(struct Mem *mem, char *value, uint32_t size);
+
+/** Copy ARRAY value to a newly allocated memory. The MEM type becomes ARRAY. */
+int
+mem_copy_array(struct Mem *mem, const char *value, uint32_t size);
 
 /** Clear MEM and set it to invalid state. */
 void
@@ -598,12 +497,20 @@ void
 mem_move(struct Mem *to, struct Mem *from);
 
 /**
+ * Append the given string to the end of the STRING or VARBINARY contained in
+ * MEM. In case MEM needs to increase the size of allocated memory, additional
+ * memory is allocated in an attempt to reduce the total number of allocations.
+ */
+int
+mem_append(struct Mem *mem, const char *value, uint32_t len);
+
+/**
  * Concatenate strings or binaries from the first and the second MEMs and write
  * to the result MEM. In case the first MEM or the second MEM is NULL, the
  * result MEM is set to NULL even if the result MEM is actually the first MEM.
  */
 int
-mem_concat(struct Mem *left, struct Mem *right, struct Mem *result);
+mem_concat(const struct Mem *a, const struct Mem *b, struct Mem *result);
 
 /**
  * Add the first MEM to the second MEM and write the result to the third MEM.
@@ -735,14 +642,6 @@ mem_to_number(struct Mem *mem);
 int
 mem_to_str(struct Mem *mem);
 
-/**
- * Convert the given MEM to STRING. This function and the function above define
- * the rules that are used to convert values of all other types to STRING. In
- * this function, the string received after convertion is NULL-terminated.
- */
-int
-mem_to_str0(struct Mem *mem);
-
 /** Convert the given MEM to given type according to explicit cast rules. */
 int
 mem_cast_explicit(struct Mem *mem, enum field_type type);
@@ -848,27 +747,6 @@ mem_get_bool_unsafe(const struct Mem *mem)
 }
 
 /**
- * Return value for MEM of STRING type if MEM contains a NULL-terminated string.
- * Otherwise convert value of the MEM to NULL-terminated string if possible and
- * return converted value. Original MEM is not changed.
- */
-int
-mem_get_str0(const struct Mem *mem, const char **s);
-
-/**
- * Return value for MEM of STRING type if MEM contains NULL-terminated string.
- * Otherwise convert MEM to MEM of string type that contains NULL-terminated
- * string and return its value. Return NULL if conversion is impossible.
- */
-static inline const char *
-mem_as_str0(struct Mem *mem)
-{
-	if (mem_to_str0(mem) != 0)
-		return NULL;
-	return mem->z;
-}
-
-/**
  * Return value for MEM of VARBINARY type. For MEM of all other types convert
  * value of the MEM to VARBINARY if possible and return converted value.
  * Original MEM is not changed.
@@ -898,13 +776,6 @@ mem_len_unsafe(const struct Mem *mem)
 }
 
 /**
- * Return address of memory allocated for accumulation structure of the
- * aggregate function.
- */
-int
-mem_get_agg(const struct Mem *mem, void **accum);
-
-/**
  * Simple type to str convertor. It is used to simplify
  * error reporting.
  */
@@ -919,14 +790,8 @@ mem_type_to_str(const struct Mem *p);
 enum mp_type
 mem_mp_type(const struct Mem *mem);
 
-enum mp_type
-sql_value_type(struct Mem *);
-
 #ifdef SQL_DEBUG
 int sqlVdbeCheckMemInvariants(struct Mem *);
-void sqlVdbeMemPrettyPrint(Mem * pMem, char *zBuf);
-void
-registerTrace(int iReg, Mem *p);
 
 /*
  * Return true if a memory cell is not marked as invalid.  This macro
@@ -934,11 +799,6 @@ registerTrace(int iReg, Mem *p);
  */
 #define memIsValid(M)  ((M)->type != MEM_TYPE_INVALID)
 #endif
-
-int sqlVdbeMemExpandBlob(struct Mem *);
-#define ExpandBlob(P) (((P)->flags&MEM_Zero)?sqlVdbeMemExpandBlob(P):0)
-
-/** Setters = Change MEM value. */
 
 int sqlVdbeMemClearAndResize(struct Mem * pMem, int n);
 
@@ -958,20 +818,7 @@ int sqlVdbeMemTooBig(Mem *);
 /* Return TRUE if Mem X contains dynamically allocated content - anything
  * that needs to be deallocated to avoid a leak.
  */
-#define VdbeMemDynamic(X) (((X)->flags & MEM_Dyn) != 0 ||\
-			   ((X)->type & (MEM_TYPE_AGG | MEM_TYPE_FRAME)) != 0)
-
-/** MEM manipulate functions. */
-
-/**
- * Memory cell mem contains the context of an aggregate function.
- * This routine calls the finalize method for that function. The
- * result of the aggregate is stored back into mem.
- *
- * Returns -1 if the finalizer reports an error. 0 otherwise.
- */
-int
-sql_vdbemem_finalize(struct Mem *mem, struct func *func);
+#define VdbeMemDynamic(X) (((X)->type & MEM_TYPE_FRAME) != 0)
 
 /**
  * Perform comparison of two tuples: unpacked (key1) and packed (key2)
@@ -1011,23 +858,24 @@ int
 mem_from_mp(struct Mem *mem, const char *buf, uint32_t *len);
 
 /**
- * Perform encoding memory variable to stream.
+ * Perform encoding of MEM to stream.
+ *
+ * @param var MEM to encode to stream.
  * @param stream Initialized mpstream encoder object.
- * @param var Vdbe memory variable to encode with stream.
  */
 void
-mpstream_encode_vdbe_mem(struct mpstream *stream, struct Mem *var);
+mem_to_mpstream(const struct Mem *var, struct mpstream *stream);
 
 /**
- * Perform encoding field_count Vdbe memory fields on region as
- * msgpack array.
- * @param fields The first Vdbe memory field to encode.
- * @param field_count Count of fields to encode.
- * @param[out] tuple_size Size of encoded tuple.
+ * Encode array of MEMs as msgpack array on region.
+ *
+ * @param mems array of MEMs to encode.
+ * @param count number of elements in the array.
+ * @param[out] size Size of encoded msgpack array.
  * @param region Region to use.
  * @retval NULL on error, diag message is set.
- * @retval Pointer to valid tuple on success.
+ * @retval Pointer to valid msgpack array on success.
  */
 char *
-sql_vdbe_mem_encode_tuple(struct Mem *fields, uint32_t field_count,
-			  uint32_t *tuple_size, struct region *region);
+mem_encode_array(const struct Mem *mems, uint32_t count, uint32_t *size,
+		 struct region *region);

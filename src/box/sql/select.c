@@ -310,6 +310,20 @@ sqlSelectDestInit(SelectDest * pDest, int eDest, int iParm, int reg_eph)
 	pDest->nSdst = 0;
 }
 
+static bool
+is_same_sorting_direction(const struct ExprList *expr_list)
+{
+	if(expr_list == NULL)
+		return true;
+	enum sort_order reference_order = expr_list->a[0].sort_order;
+	for (int i = 1; i < expr_list->nExpr; i++) {
+		assert(expr_list->a[i].sort_order != SORT_ORDER_UNDEF);
+		if (expr_list->a[i].sort_order != reference_order)
+			return false;
+	}
+	return true;
+}
+
 /*
  * Allocate a new Select structure and return a pointer to that
  * structure.
@@ -1037,9 +1051,9 @@ pushOntoSorter(Parse * pParse,		/* Parser context */
 	if (pSort->sortFlags & SORTFLAG_UseSorter) {
 		sqlVdbeAddOp2(v, OP_SorterInsert, pSort->iECursor,
 				  regRecord);
-	} else {
-		sqlVdbeAddOp2(v, OP_IdxInsert, regRecord, pSort->reg_eph);
+		return;
 	}
+	sqlVdbeAddOp2(v, OP_IdxInsert, regRecord, pSort->reg_eph);
 
 	if (iLimit) {
 		int addr;
@@ -1916,6 +1930,11 @@ generateSortTail(Parse * pParse,	/* Parsing context */
 	 */
 	sqlVdbeResolveLabel(v, addrContinue);
 	if (pSort->sortFlags & SORTFLAG_UseSorter) {
+		if (p->iLimit != 0) {
+			int iLimit = p->iOffset ? p->iOffset + 1 : p->iLimit;
+			sqlVdbeAddOp2(v, OP_DecrJumpZero, iLimit, addrBreak);
+			VdbeCoverage(v);
+		}
 		sqlVdbeAddOp2(v, OP_SorterNext, iTab, addr);
 		VdbeCoverage(v);
 	} else {
@@ -3566,6 +3585,7 @@ multiSelectOrderBy(Parse * pParse,	/* Parsing context */
 				}
 				pNew->flags |= EP_IntValue;
 				pNew->u.iValue = i;
+				pNew->type = FIELD_TYPE_INTEGER;
 				pOrderBy = sql_expr_list_append(pParse->db,
 								pOrderBy, pNew);
 				if (pOrderBy)
@@ -4647,9 +4667,7 @@ is_simple_count(struct Select *select, struct AggInfo *agg_info)
 		return NULL;
 	if (NEVER(agg_info->nFunc == 0))
 		return NULL;
-	assert(agg_info->aFunc->func->def->language ==
-	       FUNC_LANGUAGE_SQL_BUILTIN);
-	if (sql_func_flag_is_set(agg_info->aFunc->func, SQL_FUNC_COUNT) ||
+	if (strcmp(agg_info->aFunc->func->def->name, "COUNT") != 0 ||
 	    (agg_info->aFunc->pExpr->x.pList != NULL &&
 	     agg_info->aFunc->pExpr->x.pList->nExpr > 0))
 		return NULL;
@@ -5090,7 +5108,7 @@ selectExpander(Walker * pWalker, Select * p)
 			/*
 			 * Rewrite old name with correct pointer.
 			 */
-			name = tt_sprintf("sql_sq_%llX", (void *)space);
+			name = tt_sprintf("sql_sq_%llX", (long long)space);
 			sprintf(space->def->name, "%s", name);
 			while (pSel->pPrior) {
 				pSel = pSel->pPrior;
@@ -5561,6 +5579,22 @@ resetAccumulator(Parse * pParse, AggInfo * pAggInfo)
 	}
 }
 
+static inline void
+finalize_agg_function(struct Vdbe *vdbe, const struct AggInfo_func *agg_func)
+{
+	if (agg_func->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN) {
+		sqlVdbeAddOp1(vdbe, OP_AggFinal, agg_func->iMem);
+		sqlVdbeAppendP4(vdbe, agg_func->func, P4_FUNC);
+		return;
+	}
+	if (sql_func_finalize(agg_func->pExpr->u.zToken) == NULL)
+		return;
+	const char *name = tt_sprintf("%s_finalize", agg_func->pExpr->u.zToken);
+	const char *str = sqlDbStrDup(sql_get(), name);
+	sqlVdbeAddOp4(vdbe, OP_FunctionByName, 1, agg_func->iMem,
+		      agg_func->iMem, str, P4_DYNAMIC);
+}
+
 /*
  * Invoke the OP_AggFinalize opcode for every aggregate function
  * in the AggInfo structure.
@@ -5572,11 +5606,8 @@ finalizeAggFunctions(Parse * pParse, AggInfo * pAggInfo)
 	int i;
 	struct AggInfo_func *pF;
 	for (i = 0, pF = pAggInfo->aFunc; i < pAggInfo->nFunc; i++, pF++) {
-		ExprList *pList = pF->pExpr->x.pList;
 		assert(!ExprHasProperty(pF->pExpr, EP_xIsSelect));
-		sqlVdbeAddOp2(v, OP_AggFinal, pF->iMem,
-				  pList ? pList->nExpr : 0);
-		sqlVdbeAppendP4(v, pF->func, P4_FUNC);
+		finalize_agg_function(v, pF);
 	}
 }
 
@@ -5603,7 +5634,7 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 		assert(!ExprHasProperty(pF->pExpr, EP_xIsSelect));
 		if (pList) {
 			nArg = pList->nExpr;
-			regAgg = sqlGetTempRange(pParse, nArg);
+			regAgg = pF->iMem - nArg;
 			sqlExprCodeExprList(pParse, pList, regAgg, 0,
 						SQL_ECEL_DUP);
 		} else {
@@ -5621,8 +5652,8 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 			pParse->is_aborted = true;
 			return;
 		}
+		struct coll *coll = NULL;
 		if (sql_func_flag_is_set(pF->func, SQL_FUNC_NEEDCOLL)) {
-			struct coll *coll = NULL;
 			struct ExprList_item *pItem;
 			int j;
 			assert(pList != 0);	/* pList!=0 if pF->pFunc has NEEDCOLL */
@@ -5636,14 +5667,24 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 			}
 			if (regHit == 0 && pAggInfo->nAccumulator)
 				regHit = ++pParse->nMem;
-			sqlVdbeAddOp4(v, OP_CollSeq, regHit, 0, 0,
-					  (char *)coll, P4_COLLSEQ);
+			sqlVdbeAddOp1(v, OP_SkipLoad, regHit);
 		}
-		sqlVdbeAddOp3(v, OP_AggStep0, 0, regAgg, pF->iMem);
-		sqlVdbeAppendP4(v, pF->func, P4_FUNC);
-		sqlVdbeChangeP5(v, (u8) nArg);
-		sql_expr_type_cache_change(pParse, regAgg, nArg);
-		sqlReleaseTempRange(pParse, regAgg, nArg);
+		struct sql_context *ctx = sql_context_new(pF->func, coll);
+		if (ctx == NULL) {
+			pParse->is_aborted = true;
+			return;
+		}
+		if (pF->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN) {
+			sqlVdbeAddOp3(v, OP_AggStep, nArg, regAgg, pF->iMem);
+			sqlVdbeAppendP4(v, ctx, P4_FUNCCTX);
+		} else {
+			const char *name = pF->func->def->name;
+			uint32_t len = pF->func->def->name_len;
+			const char *str = sqlDbStrNDup(pParse->db, name, len);
+			assert(regAgg == pF->iMem - nArg);
+			sqlVdbeAddOp4(v, OP_FunctionByName, nArg + 1, regAgg,
+				      pF->iMem, str, P4_DYNAMIC);
+		}
 		if (addrNext) {
 			sqlVdbeResolveLabel(v, addrNext);
 			sqlExprCacheClear(pParse);
@@ -6110,7 +6151,13 @@ sqlSelect(Parse * pParse,		/* The parser context */
 		p->nSelectRow = 320;	/* 4 billion rows */
 	}
 	computeLimitRegisters(pParse, p, iEnd);
-	if (p->iLimit == 0 && sSort.addrSortIndex >= 0) {
+	/*
+	 * At the moment we don't have iterators where the fields are sorted in
+	 * a different order. Because of this, we have to sort all the data and
+	 * select only the required number of rows.
+	 */
+	if (sSort.addrSortIndex >= 0 &&
+	    (p->iLimit == 0 || !is_same_sorting_direction(sSort.pOrderBy))) {
 		struct VdbeOp *op = sqlVdbeGetOp(v, sSort.addrSortIndex);
 		struct sql_key_info *key_info =
 			sql_key_info_new_from_space_info(op->p4.space_info);
@@ -6744,4 +6791,24 @@ sql_expr_extract_select(struct Parse *parser, struct Select *select)
 	 */
 	parser->parsed_ast.expr =
 		sqlExprDup(parser->db, expr_list->a->pExpr, 0);
+}
+
+struct sql_context *
+sql_context_new(struct func *func, struct coll *coll)
+{
+	struct sql_context *ctx = sqlDbMallocRawNN(sql_get(), sizeof(*ctx));
+	if (ctx == NULL)
+		return NULL;
+	ctx->pOut = NULL;
+	ctx->func = func;
+	ctx->is_aborted = false;
+	ctx->skipFlag = 0;
+	ctx->coll = coll;
+	return ctx;
+}
+
+void
+sql_context_delete(struct sql_context *ctx)
+{
+	sqlDbFree(sql_get(), ctx);
 }

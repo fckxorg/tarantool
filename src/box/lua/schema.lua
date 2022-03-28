@@ -71,6 +71,8 @@ ffi.cdef[[
     box_txn_id();
     int
     box_txn_begin();
+    int
+    box_txn_set_timeout(double timeout);
     /** \endcond public */
     /** \cond public */
     int
@@ -81,6 +83,11 @@ ffi.cdef[[
     box_txn_savepoint_t *
     box_txn_savepoint();
 
+    struct port {
+        const struct port_vtab *vtab;
+        char pad[68];
+    };
+
     struct port_c_entry {
         struct port_c_entry *next;
         union {
@@ -88,6 +95,7 @@ ffi.cdef[[
             char *mp;
         };
         uint32_t mp_size;
+        struct tuple_format *mp_format;
     };
 
     struct port_c {
@@ -328,13 +336,33 @@ local function feedback_save_event(event)
     end
 end
 
-box.begin = function()
+box.begin = function(options)
+    local timeout
+    if options then
+        check_param(options, 'options', 'table')
+        timeout = options.timeout
+        if timeout and (type(timeout) ~= "number" or timeout <= 0) then
+            box.error(box.error.ILLEGAL_PARAMS,
+                      "timeout must be a number greater than 0")
+        end
+    end
     if builtin.box_txn_begin() == -1 then
         box.error()
+    end
+    if timeout then
+        assert(builtin.box_txn_set_timeout(timeout) == 0)
     end
 end
 
 box.is_in_txn = builtin.box_txn
+
+box.txn_id = function()
+    local id = builtin.box_txn_id()
+    if -1 == id then
+        return nil
+    end
+    return tonumber(id)
+end
 
 box.savepoint = function()
     local csavepoint = builtin.box_txn_savepoint()
@@ -361,6 +389,192 @@ end
 -- box.commit yields, so it's defined as Lua/C binding
 -- box.rollback and box.rollback_to_savepoint yields as well
 
+-- Check and normalize constraint definition.
+-- Given constraint @a constr is expected to be either a func name or
+--  a table with function names and/or consraint name:function name pairs.
+-- In case of error box.error.ILLEGAL_PARAMS is raised, and @a error_prefix
+--  is added before string message.
+local function normalize_constraint(constr, error_prefix)
+    if type(constr) == 'string' then
+        -- Short form of field constraint - just name of func,
+        -- e.g.: {...constraint = "func_name"}
+        local found = box.space._func.index.name:get(constr)
+        if not found then
+            box.error(box.error.ILLEGAL_PARAMS,
+                      error_prefix .. "constraint function " ..
+                      "was not found by name '" .. constr .. "'")
+        end
+        -- normalize form of constraint.
+        return {[constr] = found.id}
+    elseif type(constr) == 'table' then
+        -- Long form of field constraint - a table with:
+        -- 1) func names 2) constraint name -> func name pairs.
+        -- e.g.: {..., constraint = {func1, name2 = func2, ...}}
+        local result = {}
+        for constr_key, constr_func in pairs(constr) do
+            if type(constr_func) ~= 'string' then
+                box.error(box.error.ILLEGAL_PARAMS,
+                          error_prefix .. "constraint function " ..
+                          "is expected to be a string, " ..
+                          "but got " .. type(constr_func))
+            end
+            local found = box.space._func.index.name:get(constr_func)
+            if not found then
+                box.error(box.error.ILLEGAL_PARAMS,
+                          error_prefix .. "constraint function " ..
+                          "was not found by name '" .. constr_func .. "'")
+            end
+            local constr_name = nil
+            if type(constr_key) == 'number' then
+                -- 1) func name only.
+                constr_name = constr_func
+            elseif type(constr_key) == 'string' then
+                -- 2) constraint name + func name pair.
+                constr_name = constr_key
+            else
+                -- what are you?
+                box.error(box.error.ILLEGAL_PARAMS,
+                          error_prefix .. "constraint name " ..
+                          "is expected to be a string, " ..
+                          "but got " .. type(constr_key))
+            end
+            -- normalize form of constraint pair.
+            result[constr_name] = found.id
+        end
+        -- return normalized form of constraints.
+        return result
+    elseif constr then
+        -- unrecognized form of constraint.
+        box.error(box.error.ILLEGAL_PARAMS,
+                  error_prefix .. "constraint must be string or table")
+    end
+    return nil
+end
+
+-- Helper of normalize_foreign_key.
+-- Check and normalize one foreign key definition.
+-- If not is_complex, field is expected to be a numeric ID or string name of
+--  foreign field.
+-- If is_complex, field is expected to be a table with local field ->
+--  foreign field mapping.
+local function normalize_foreign_key_one(def, error_prefix, is_complex)
+    if def.space == nil then
+        box.error(box.error.ILLEGAL_PARAMS,
+                  error_prefix .. "foreign key: space must be specified")
+    end
+    if def.field == nil then
+        box.error(box.error.ILLEGAL_PARAMS,
+                  error_prefix .. "foreign key: field must be specified")
+    end
+    if type(def.space) ~= 'string' and type(def.space) ~= 'number' then
+        box.error(box.error.ILLEGAL_PARAMS,
+                  error_prefix .. "foreign key: space must be string or number")
+    end
+    if not is_complex then
+        if type(def.field) ~= 'string' and type(def.field) ~= 'number' then
+            box.error(box.error.ILLEGAL_PARAMS,
+                      error_prefix .. "foreign key: field must be string or number")
+        end
+        if type(def.field) == 'number' then
+            -- convert to zero-based index.
+            def.field = def.field - 1
+        end
+    else
+        if type(def.field) ~= 'table' then
+            box.error(box.error.ILLEGAL_PARAMS,
+                      error_prefix .. "foreign key: field must be a table " ..
+                      "with local field -> foreign field mapping")
+        end
+        local count = 0
+        local converted = {}
+        for k,v in pairs(def.field) do
+            count = count + 1
+            if type(k) ~= 'string' and type(k) ~= 'number' then
+                box.error(box.error.ILLEGAL_PARAMS,
+                          error_prefix .. "foreign key: local field must be "
+                          .. "string or number")
+            end
+            if type(k) == 'number' then
+                -- convert to zero-based index.
+                k = k - 1
+            end
+            if type(v) ~= 'string' and type(v) ~= 'number' then
+                box.error(box.error.ILLEGAL_PARAMS,
+                          error_prefix .. "foreign key: foreign field must be "
+                          .. "string or number")
+            end
+            if type(v) == 'number' then
+                -- convert to zero-based index.
+                v = v - 1
+            end
+            converted[k] = v
+        end
+        if count < 1 then
+            box.error(box.error.ILLEGAL_PARAMS,
+                      error_prefix .. "foreign key: field must be a table " ..
+                      "with local field -> foreign field mapping")
+        end
+        def.field = setmap(converted)
+    end
+    if not box.space[def.space] then
+        box.error(box.error.ILLEGAL_PARAMS,
+                  error_prefix .. "foreign key: space " .. tostring(def.space)
+                  .. " was not found")
+    end
+    for k in pairs(def) do
+        if k ~= 'space' and k ~= 'field' then
+            box.error(box.error.ILLEGAL_PARAMS, error_prefix ..
+                      "foreign key: unexpected parameter '" ..
+                      tostring(k) .. "'")
+        end
+    end
+    return {space = box.space[def.space].id, field = def.field}
+end
+
+-- Check and normalize foreign key definition.
+-- Given definition @a fkey is expected to be one of:
+-- {space=.., field=..}
+-- {fkey_name={space=.., field=..}, }
+-- If not is_complex, field is expected to be a numeric ID or string name of
+--  foreign field.
+-- If is_complex, field is expected to be a table with local field ->
+--  foreign field mapping.
+-- In case of error box.error.ILLEGAL_PARAMS is raised, and @a error_prefix
+--  is added before string message.
+local function normalize_foreign_key(fkey, error_prefix, is_complex)
+    if fkey == nil then
+        return nil
+    end
+    if type(fkey) ~= 'table' then
+        -- unrecognized form
+        box.error(box.error.ILLEGAL_PARAMS,
+                  error_prefix .. "foreign key must be a table")
+    end
+    if fkey.space ~= nil and fkey.field ~= nil and
+        (type(fkey.space) ~= 'table' or type(fkey.field) ~= 'table') then
+        -- the first, short form.
+        fkey = normalize_foreign_key_one(fkey, error_prefix, is_complex)
+        return {[box.space[fkey.space].name]=fkey}
+    end
+    -- the second, detailed form.
+    local result = {}
+    for k,v in pairs(fkey) do
+        if type(k) ~= 'string' then
+            box.error(box.error.ILLEGAL_PARAMS,
+                      error_prefix .. "foreign key name must be a string")
+        end
+        if type(v) ~= 'table' then
+            -- unrecognized form
+            box.error(box.error.ILLEGAL_PARAMS,
+                      error_prefix .. "foreign key definition must be a table "
+                      .. "with 'space' and 'field' members")
+        end
+        v = normalize_foreign_key_one(v, error_prefix, is_complex)
+        result[k] = v
+    end
+    return result
+end
+
 local function update_format(format)
     local result = {}
     for i, given in ipairs(format) do
@@ -385,9 +599,14 @@ local function update_format(format)
                     local coll = box.space._collation.index.name:get{v}
                     if not coll then
                         box.error(box.error.ILLEGAL_PARAMS,
-                            "format[" .. i .. "]: collation was not found by name '" .. v .. "'")
+                            "format[" .. i .. "]: collation " ..
+                            "was not found by name '" .. v .. "'")
                     end
                     field[k] = coll.id
+                elseif k == 'constraint' then
+                    field[k] = normalize_constraint(v, "format[" .. i .. "]: ")
+                elseif k == 'foreign_key' then
+                    field[k] = normalize_foreign_key(v, "format[" .. i .. "]: ")
                 else
                     field[k] = v
                 end
@@ -421,6 +640,9 @@ box.schema.space.create = function(name, options)
         is_local = 'boolean',
         temporary = 'boolean',
         is_sync = 'boolean',
+        defer_deletes = 'boolean',
+        constraint = 'string, table',
+        foreign_key = 'table',
     }
     local options_defaults = {
         engine = 'memtx',
@@ -429,6 +651,11 @@ box.schema.space.create = function(name, options)
     }
     check_param_table(options, options_template)
     options = update_param_table(options, options_defaults)
+    if options.engine == 'vinyl' then
+        options = update_param_table(options, {
+            defer_deletes = box.cfg.vinyl_defer_deletes,
+        })
+    end
 
     local _space = box.space[box.schema.SPACE_ID]
     if box.space[name] then
@@ -461,11 +688,16 @@ box.schema.space.create = function(name, options)
     local format = options.format and options.format or {}
     check_param(format, 'format', 'table')
     format = update_format(format)
+    local constraint = normalize_constraint(options.constraint, '')
+    local foreign_key = normalize_foreign_key(options.foreign_key, '', true)
     -- filter out global parameters from the options array
     local space_options = setmap({
         group_id = options.is_local and 1 or nil,
         temporary = options.temporary and true or nil,
-        is_sync = options.is_sync
+        is_sync = options.is_sync,
+        defer_deletes = options.defer_deletes and true or nil,
+        constraint = constraint,
+        foreign_key = foreign_key,
     })
     _space:insert{id, uid, name, options.engine, options.field_count,
         space_options, format}
@@ -558,7 +790,10 @@ local alter_space_template = {
     format = 'table',
     temporary = 'boolean',
     is_sync = 'boolean',
+    defer_deletes = 'boolean',
     name = 'string',
+    constraint = 'string, table',
+    foreign_key = 'table',
 }
 
 box.schema.space.alter = function(space_id, options)
@@ -594,11 +829,29 @@ box.schema.space.alter = function(space_id, options)
         flags.is_sync = options.is_sync
     end
 
+    if options.defer_deletes ~= nil then
+        flags.defer_deletes = options.defer_deletes
+    end
+
     local format
     if options.format ~= nil then
         format = update_format(options.format)
     else
         format = tuple.format
+    end
+
+    if options.constraint ~= nil then
+        if table.equals(options.constraint, {}) then
+            options.constraint = nil
+        end
+        flags.constraint = normalize_constraint(options.constraint, '')
+    end
+
+    if options.foreign_key ~= nil then
+        if table.equals(options.foreign_key, {}) then
+            options.foreign_key = nil
+        end
+        flags.foreign_key = normalize_foreign_key(options.foreign_key, '', true)
     end
 
     tuple = tuple:totable()
@@ -1461,7 +1714,8 @@ local iterator_gen_luac = function(param, state) -- luacheck: no unused args
 end
 
 -- global struct port instance to use by select()/get()
-local port_c = ffi.new('struct port_c')
+local port = ffi.new('struct port')
+local port_c = ffi.cast('struct port_c *', port)
 
 -- Helper function to check space:method() usage
 local function check_space_arg(space, method)
@@ -1513,8 +1767,13 @@ box.internal.check_ck_constraint_arg = check_ck_constraint_arg
 box.internal.schema_version = builtin.box_schema_version
 
 local function check_iterator_type(opts, key_is_nil)
+    local opts_type = type(opts)
+    if opts ~= nil and opts_type ~= "table" and opts_type ~= "string" and opts_type ~= "number" then
+        box.error(box.error.ITERATOR_TYPE, opts)
+    end
+
     local itype
-    if opts and opts.iterator then
+    if opts_type == "table" and opts.iterator then
         if type(opts.iterator) == "number" then
             itype = opts.iterator
         elseif type(opts.iterator) == "string" then
@@ -1525,7 +1784,9 @@ local function check_iterator_type(opts, key_is_nil)
         else
             box.error(box.error.ITERATOR_TYPE, tostring(opts.iterator))
         end
-    elseif opts and type(opts) == "string" then
+    elseif opts_type == "number" then
+        itype = opts
+    elseif opts_type == "string" then
         itype = box.index[string.upper(opts)]
         if itype == nil then
             box.error(box.error.ITERATOR_TYPE, opts)
@@ -1537,7 +1798,7 @@ local function check_iterator_type(opts, key_is_nil)
     return itype
 end
 
-internal.check_iterator_type = check_iterator_type -- export for net.box
+internal.check_iterator_type = check_iterator_type
 
 local base_index_mt = {}
 base_index_mt.__index = base_index_mt
@@ -1587,6 +1848,7 @@ end
 --   'sql' - like mysql result (default)
 --   'gh' (or 'github' or 'markdown') - markdown syntax, for pasting to github.
 --   'jira' syntax (for pasting to jira)
+-- columns: array with desired columns (numbers or names).
 -- widths: array with desired widths of columns.
 -- max_width: limit entire length of a row string, longest fields will be cut.
 --  Set to 0 (default) to detect and use screen width. Set to -1 for no limit.
@@ -1595,7 +1857,14 @@ end
 --  in YAML output. Not applicabble when print=true.
 base_index_mt.fselect = function(index, key, opts, fselect_opts)
     -- Options.
-    if type(fselect_opts) ~= 'table' then fselect_opts = {} end
+    if type(opts) == 'string' and fselect_opts == nil then
+        fselect_opts = {columns = opts}
+        opts = nil
+    elseif type(fselect_opts) == 'string' then
+        fselect_opts = {columns = fselect_opts}
+    elseif type(fselect_opts) ~= 'table' then
+        fselect_opts = {}
+    end
 
     -- Get global value, like _G[name] but wrapped with pcall for strict mode.
     local function get_global(name)
@@ -1613,14 +1882,20 @@ base_index_mt.fselect = function(index, key, opts, fselect_opts)
     -- Find an option in opts, fselect_opts or _G by given name.
     -- In opts and _G the value is searched with 'fselect_' prefix;
     -- In fselect_opts - with or without prefix.
-    local function get_opt(name, default, expected_type)
+    local function get_opt(name, default, expected_types)
+        local expected_types_set = {}
+        for _, v in pairs(expected_types:split(',')) do
+            expected_types_set[v:strip()] = true
+        end
         local prefix_name = 'fselect_' .. name
         local variants = {fselect_opts[prefix_name], fselect_opts[name],
             grab_from_opts(prefix_name), get_global(prefix_name), default }
         local min_i = 0
         local min_v = nil
         for i,v in pairs(variants) do
-            if (type(v) == expected_type and i < min_i) or min_v == nil then
+            -- Can't use ipairs since it's an array with nils.
+            -- Have to sort by i, because pairs() doesn't provide order.
+            if expected_types_set[type(v)] and (i < min_i or min_v == nil) then
                 min_i = i
                 min_v = v
             end
@@ -1635,6 +1910,7 @@ base_index_mt.fselect = function(index, key, opts, fselect_opts)
     if fselect_type ~= 'sql' and fselect_type ~= 'markdown' and fselect_type ~= 'jira' then
         fselect_type = 'sql'
     end
+    local columns = get_opt('columns', nil, 'table, string')
     local widths = get_opt('widths', {}, 'table')
     local default_max_width = 0
     if #widths > 0 then default_max_width = -1 end
@@ -1644,6 +1920,22 @@ base_index_mt.fselect = function(index, key, opts, fselect_opts)
     local min_col_width = 5
     local max_col_width = 1000
     if use_print then use_nbsp = false end
+
+    -- Convert comma separated columns into array, to numbers if possible
+    if type(columns) == 'string' then
+        columns = columns:split(',');
+    end
+    if columns then
+        local res_columns = {}
+        for _, str in ipairs(columns) do
+            if tonumber(str) then
+                table.insert(res_columns, tonumber(str))
+            else
+                table.insert(res_columns, str:strip())
+            end
+        end
+        columns = res_columns
+    end
 
     -- Screen size autodetection.
     local function detect_width()
@@ -1667,26 +1959,44 @@ base_index_mt.fselect = function(index, key, opts, fselect_opts)
     -- select and stringify.
     local tab = { }
     local json = require('json')
-    for _,t in index:pairs(key, opts) do
+    for _, t in index:pairs(key, opts) do
         local row = { }
-        for _,f in t:pairs() do
-            table.insert(row, json.encode(f))
+        if columns then
+            for _, c in ipairs(columns) do
+                table.insert(row, json.encode(t[c]))
+            end
+        else
+            for _, f in t:pairs() do
+                table.insert(row, json.encode(f))
+            end
         end
         table.insert(tab, row)
     end
-
     local num_rows = #tab
-    local space = box.space[index.space_id]
-    local fmt = space:format()
-    local num_cols = math.max(#fmt, 1)
-    for i = 1,num_rows do
+    local num_cols = 1
+    for i = 1, num_rows do
         num_cols = math.max(num_cols, #tab[i])
     end
 
+    local fmt = box.space[index.space_id]:format()
     local names = {}
-    for j = 1,num_cols do
-        table.insert(names, fmt[j] and fmt[j].name or 'col' .. tostring(j))
+    if columns then
+        for _, c in ipairs(columns) do
+            if type(c) == 'string' then
+                table.insert(names, c)
+            elseif fmt[c] then
+                table.insert(names, fmt[c].name)
+            else
+                table.insert(names, 'col' .. tostring(c))
+            end
+        end
+    else
+        num_cols = math.max(num_cols, #fmt)
+        for c = 1, num_cols do
+            table.insert(names, fmt[c] and fmt[c].name or 'col' .. tostring(c))
+        end
     end
+
     local real_width = num_cols + 1 -- including '|' symbols
     for j = 1,num_cols do
         if type(widths[j]) ~= 'number' then
@@ -1933,7 +2243,7 @@ local function check_select_opts(opts, key_is_nil)
     local offset = 0
     local limit = 4294967295
     local iterator = check_iterator_type(opts, key_is_nil)
-    if opts ~= nil then
+    if opts ~= nil and type(opts) == "table" then
         if opts.offset ~= nil then
             offset = opts.offset
         end
@@ -1944,13 +2254,14 @@ local function check_select_opts(opts, key_is_nil)
     return iterator, offset, limit
 end
 
+box.internal.check_select_opts = check_select_opts -- for net.box
+
 base_index_mt.select_ffi = function(index, key, opts)
     check_index_arg(index, 'select')
     local ibuf = cord_ibuf_take()
     local key, key_end = tuple_encode(ibuf, key)
     local iterator, offset, limit = check_select_opts(opts, key + 1 >= key_end)
 
-    local port = ffi.cast('struct port *', port_c)
     local nok = builtin.box_select(index.space_id, index.id, iterator, offset,
                                    limit, key, key_end, port) ~= 0
     cord_ibuf_put(ibuf)
@@ -2358,53 +2669,56 @@ box.schema.sequence.drop = function(name, opts)
     _sequence:delete{id}
 end
 
-local function privilege_resolve(privilege)
-    local numeric = 0
-    if type(privilege) == 'string' then
-        privilege = string.lower(privilege)
-        if string.find(privilege, 'read') then
-            numeric = numeric + box.priv.R
+local function privilege_parse(privs)
+    -- TODO: introduce a global privilege -> bit mapping?
+    local privs_map = {
+        read      = box.priv.R,
+        write     = box.priv.W,
+        execute   = box.priv.X,
+        session   = box.priv.S,
+        usage     = box.priv.U,
+        create    = box.priv.C,
+        drop      = box.priv.D,
+        alter     = box.priv.A,
+        reference = box.priv.REFERENECE,
+        trigger   = box.priv.TRIGGER,
+        insert    = box.priv.INSERT,
+        update    = box.priv.UPDATE,
+        delete    = box.priv.DELETE
+    }
+    local privs_cp = string.lower(privs):gsub('^[%A]*', '')
+
+    local mask = 0
+    -- TODO: prove correctness formally (e.g. via a FSA)?
+    repeat
+        local matched = false
+        -- TODO: replace this with one group pattern when Lua patterns start
+        -- supporting disjunction (e.g. '|')
+        for priv, bit in pairs(privs_map) do
+            privs_cp = string.gsub(privs_cp, '^' .. priv .. '[%A]*',
+                                   function()
+                                       matched = true
+                                       mask = mask + bit
+                                       privs_map[priv] = 0
+                                       return ''
+                                   end)
         end
-        if string.find(privilege, 'write') then
-            numeric = numeric + box.priv.W
-        end
-        if string.find(privilege, 'execute') then
-            numeric = numeric + box.priv.X
-        end
-        if string.find(privilege, 'session') then
-            numeric = numeric + box.priv.S
-        end
-        if string.find(privilege, 'usage') then
-            numeric = numeric + box.priv.U
-        end
-        if string.find(privilege, 'create') then
-            numeric = numeric + box.priv.C
-        end
-        if string.find(privilege, 'drop') then
-            numeric = numeric + box.priv.D
-        end
-        if string.find(privilege, 'alter') then
-            numeric = numeric + box.priv.A
-        end
-        if string.find(privilege, 'reference') then
-            numeric = numeric + box.priv.REFERENCE
-        end
-        if string.find(privilege, 'trigger') then
-            numeric = numeric + box.priv.TRIGGER
-        end
-        if string.find(privilege, 'insert') then
-            numeric = numeric + box.priv.INSERT
-        end
-        if string.find(privilege, 'update') then
-            numeric = numeric + box.priv.UPDATE
-        end
-        if string.find(privilege, 'delete') then
-            numeric = numeric + box.priv.DELETE
-        end
-    else
-        numeric = privilege
+    until (not matched)
+
+    if privs_cp ~= '' then
+        mask = 0
     end
-    return numeric
+
+    return mask
+end
+
+local function privilege_resolve(privs)
+    if type(privs) == 'string' then
+        return privilege_parse(privs)
+    elseif type(privs) == 'number' then -- TODO: assert type(privs)?
+        return privs
+    end
+    return 0
 end
 
 -- allowed combination of privilege bits for object
@@ -2577,7 +2891,10 @@ box.schema.func.create = function(name, opts)
                               if_not_exists = 'boolean',
                               language = 'string', body = 'string',
                               is_deterministic = 'boolean',
-                              is_sandboxed = 'boolean', comment = 'string',
+                              is_sandboxed = 'boolean',
+                              is_multikey = 'boolean', aggregate = 'string',
+                              takes_raw_args = 'boolean',
+                              comment = 'string',
                               param_list = 'table', returns = 'string',
                               exports = 'table', opts = 'table' })
     local _func = box.space[box.schema.FUNC_ID]
@@ -2598,6 +2915,12 @@ box.schema.func.create = function(name, opts)
                     comment = '', created = datetime, last_altered = datetime})
     opts.language = string.upper(opts.language)
     opts.setuid = opts.setuid and 1 or 0
+    if opts.is_multikey then
+        opts.opts.is_multikey = opts.is_multikey
+    end
+    if opts.takes_raw_args then
+        opts.opts.takes_raw_args = opts.takes_raw_args
+    end
     _func:auto_increment{session.euid(), name, opts.setuid, opts.language,
                          opts.body, opts.routine_type, opts.param_list,
                          opts.returns, opts.aggregate, opts.sql_data_access,
@@ -2663,7 +2986,7 @@ func_mt.call = function(func, args)
     if type(args) ~= 'table' then
         error('Use func:call(table)')
     end
-    return box.schema.func.call(func.name, unpack(args))
+    return box.schema.func.call(func.name, unpack(args, 1, table.maxn(args)))
 end
 
 function box.schema.func.bless(func)

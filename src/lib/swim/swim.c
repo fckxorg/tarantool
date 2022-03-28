@@ -920,14 +920,8 @@ swim_new_member(struct swim *swim, const struct sockaddr_in *addr,
 	if (member == NULL)
 		return NULL;
 	assert(swim_find_member(swim, uuid) == NULL);
-	mh_int_t rc = mh_swim_table_put(swim->members,
-					(const struct swim_member **) &member,
-					NULL, NULL);
-	if (rc == mh_end(swim->members)) {
-		swim_member_delete(member);
-		diag_set(OutOfMemory, sizeof(mh_int_t), "malloc", "node");
-		return NULL;
-	}
+	mh_swim_table_put(swim->members, (const struct swim_member **)&member,
+			  NULL, NULL);
 	if (mh_size(swim->members) > 1)
 		swim_ev_timer_again(swim_loop(), &swim->round_tick);
 
@@ -1907,12 +1901,6 @@ swim_new(uint64_t generation)
 	}
 	swim->initial_generation = generation;
 	swim->members = mh_swim_table_new();
-	if (swim->members == NULL) {
-		free(swim);
-		diag_set(OutOfMemory, sizeof(*swim->members),
-			 "mh_swim_table_new", "members");
-		return NULL;
-	}
 	rlist_create(&swim->round_queue);
 	swim_ev_timer_init(&swim->round_tick, swim_begin_step,
 			   0, HEARTBEAT_RATE_DEFAULT);

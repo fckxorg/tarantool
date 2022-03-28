@@ -73,8 +73,18 @@ struct space_opts {
 	 * until replicated to a quorum of replicas.
 	 */
 	bool is_sync;
+	/**
+	 * Setting this flag for a Vinyl space defers generation of DELETE
+	 * statements for secondary indexes till the primary index compaction,
+	 * which should speed up writes, but may also slow down reads.
+	 */
+	bool defer_deletes;
 	/** SQL statement that produced this space. */
 	char *sql;
+	/** Array of constraints. Can be NULL if constraints_count == 0. */
+	struct tuple_constraint_def *constraint_def;
+	/** Number of constraints. */
+	uint32_t constraint_count;
 };
 
 extern const struct space_opts space_opts_default;
@@ -126,7 +136,7 @@ struct space_def {
 };
 
 /*
- * Free a default value syntax trees of @a defs.
+ * Free a default value syntax trees and other private data of @a defs.
  * @param fields Fields array to destroy.
  * @param field_count Length of @a fields.
  * @param extern_alloc Fields expression AST allocated externally.
@@ -203,6 +213,22 @@ size_t
 space_def_sizeof(uint32_t name_len, const struct field_def *fields,
 		 uint32_t field_count, uint32_t *names_offset,
 		 uint32_t *fields_offset, uint32_t *def_expr_offset);
+
+struct tuple_format;
+struct tuple_format_vtab;
+struct key_def;
+/**
+ * Convenient @sa tuple_format_new helper.
+ * @param vtab Virtual function table for specific engines.
+ * @param engine Pointer to storage engine.
+ * @param keys Array of key_defs of a space.
+ * @param key_count The number of keys in @a keys array.
+ * @param def Source of the rest tuple_format_new arguments
+ */
+struct tuple_format *
+space_tuple_format_new(struct tuple_format_vtab *vtab, void *engine,
+		       struct key_def *const *keys, uint16_t key_count,
+		       const struct space_def *def);
 
 #if defined(__cplusplus)
 } /* extern "C" */

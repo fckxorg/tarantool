@@ -43,15 +43,11 @@ endif()
 #
 # Check submodules
 #
-function(update_submodules)
-    message(STATUS "Updating submodules")
-    execute_process(COMMAND ${GIT} submodule update --init --recursive
-                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-endfunction()
-
-if(NOT EXISTS ${CMAKE_SOURCE_DIR}/src/lib/small/CMakeLists.txt)
-    if (EXISTS "${CMAKE_SOURCE_DIR}/.git" AND GIT)
-        update_submodules()
+if(NOT EXISTS ${PROJECT_SOURCE_DIR}/src/lib/small/CMakeLists.txt)
+    if (EXISTS "${PROJECT_SOURCE_DIR}/.git" AND GIT)
+        message(STATUS "Updating submodules")
+        execute_process(COMMAND ${GIT} submodule update --init --recursive
+                        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     else()
         message(FATAL_ERROR "Failed to find submodules")
     endif()
@@ -152,7 +148,7 @@ list(APPEND tagsExclude "--exclude=.git/*")
 list(APPEND tagsExclude "--exclude=.pc/*")
 list(APPEND tagsExclude "--exclude=patches/*")
 add_custom_target(tags COMMAND ${CTAGS} -R ${tagsExclude} -f tags
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_custom_target(ctags DEPENDS tags)
 
 #
@@ -223,39 +219,37 @@ endif()
 # Get version
 #
 
-set (PACKAGE_VERSION "")
-set (TARANTOOL_VERSION "")
-
-# Try to get version from VERSION file
-set(VERSION_FILE_ORIG "${PROJECT_SOURCE_DIR}/VERSION")
-set(VERSION_FILE "${PROJECT_BINARY_DIR}/VERSION")
-if (EXISTS "${VERSION_FILE_ORIG}")
-    file (STRINGS "${VERSION_FILE_ORIG}" TARANTOOL_VERSION)
-elseif (EXISTS "${VERSION_FILE}")
-    file (STRINGS "${VERSION_FILE}" TARANTOOL_VERSION)
-endif()
-
-# Get git version only if source directory has .git repository, this
-# avoids git to search .git repository in parent
-# directories.
-#
-if (EXISTS "${CMAKE_SOURCE_DIR}/.git" AND GIT)
-    execute_process (COMMAND ${GIT} describe --long HEAD
-        OUTPUT_VARIABLE TARANTOOL_GIT_VERSION
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-
-    if (NOT ("${TARANTOOL_GIT_VERSION}" STREQUAL "${TARANTOOL_VERSION}"))
-        set(TARANTOOL_VERSION "${TARANTOOL_GIT_VERSION}")
-        message(STATUS "Generating VERSION file")
-        file(WRITE ${VERSION_FILE} "${TARANTOOL_VERSION}\n")
-
-        update_submodules()
+if(NOT TARANTOOL_VERSION)
+    # Try to get version from VERSION file
+    set(VERSION_FILE_ORIG "${PROJECT_SOURCE_DIR}/VERSION")
+    set(VERSION_FILE "${PROJECT_BINARY_DIR}/VERSION")
+    if (EXISTS "${VERSION_FILE_ORIG}")
+        file (STRINGS "${VERSION_FILE_ORIG}" TARANTOOL_VERSION)
+    elseif (EXISTS "${VERSION_FILE}")
+        file (STRINGS "${VERSION_FILE}" TARANTOOL_VERSION)
     endif()
-endif()
 
-if (NOT TARANTOOL_VERSION)
-    message (FATAL_ERROR "Unable to retrive version from git or ${VERSION_FILE} file.")
+    # Get git version only if source directory has .git repository, this
+    # avoids git to search .git repository in parent
+    # directories.
+    #
+    if (EXISTS "${CMAKE_SOURCE_DIR}/.git" AND GIT)
+        execute_process (COMMAND ${GIT} describe --long HEAD
+            OUTPUT_VARIABLE TARANTOOL_GIT_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+        if (NOT ("${TARANTOOL_GIT_VERSION}" STREQUAL "${TARANTOOL_VERSION}"))
+            set(TARANTOOL_VERSION "${TARANTOOL_GIT_VERSION}")
+            message(STATUS "Generating VERSION file")
+            file(WRITE ${VERSION_FILE} "${TARANTOOL_VERSION}\n")
+        endif()
+    endif()
+
+    if (NOT TARANTOOL_VERSION)
+        message (FATAL_ERROR
+            "Unable to retrive version from git or ${VERSION_FILE} file.")
+    endif()
 endif()
 
 #
@@ -361,6 +355,9 @@ find_package_message(MODULE_LIBPATH "Lua package.cpath: ${MODULE_LIBPATH}"
 ## Third-Party libraries
 ##
 
+set(EMBED_LUAZLIB ${BUILD_STATIC})
+set(EMBED_LUAROCKS ${BUILD_STATIC})
+
 #
 # Since we *optionally* build bundled libs, a direct build
 # dependency between tarantool_box and libluajit/libobjc won't
@@ -370,6 +367,10 @@ find_package_message(MODULE_LIBPATH "Lua package.cpath: ${MODULE_LIBPATH}"
 #
 
 add_custom_target(build_bundled_libs)
+
+#
+# ZSTD
+#
 
 # Debian: missing zstd_static.h in libzstd-dev
 # Fedora: not found
@@ -383,6 +384,20 @@ if (ENABLE_BUNDLED_ZSTD)
 else()
     set(ZSTD_FIND_REQUIRED ON)
     find_package(ZSTD)
+endif()
+
+#
+# ZLIB
+#
+set(ZLIB_FIND_REQUIRED ON)
+find_package(ZLIB)
+
+#
+# ZZIP
+#
+if(EMBED_LUAZIP)
+    set(ZZIP_FIND_REQUIRED ON)
+    find_package(ZZIP)
 endif()
 
 #
@@ -401,12 +416,7 @@ endif()
 # it to libraries list in case of static openssl linking.
 #
 if(OPENSSL_USE_STATIC_LIBS)
-    if(BUILD_STATIC)
-        find_library(Z_LIBRARY libz.a)
-    else()
-        find_library(Z_LIBRARY z)
-    endif()
-    set(OPENSSL_LIBRARIES ${OPENSSL_LIBRARIES} ${Z_LIBRARY})
+    set(OPENSSL_LIBRARIES ${OPENSSL_LIBRARIES} ${ZLIB_LIBRARIES})
 endif()
 
 #
@@ -415,10 +425,16 @@ endif()
 option(ENABLE_BUNDLED_LIBCURL "Enable building of the bundled libcurl" ON)
 option(BUNDLED_LIBCURL_USE_ARES "Build curl with bundled c-ares"
        ${ENABLE_BUNDLED_LIBCURL})
+option(BUNDLED_LIBCURL_USE_NGHTTP2 "Build curl with bundled nghttp2"
+       ${ENABLE_BUNDLED_LIBCURL})
 if (ENABLE_BUNDLED_LIBCURL)
     if(BUNDLED_LIBCURL_USE_ARES)
         include(BuildAres)
         ares_build()
+    endif()
+    if(BUNDLED_LIBCURL_USE_NGHTTP2)
+        include(BuildNghttp2)
+        nghttp2_build()
     endif()
     include(BuildLibCURL)
     curl_build()
@@ -568,8 +584,12 @@ else()
 endif()
 
 #
-# zstd
+# Christian Hansen c-dt
 #
+
+include(BuildCDT)
+libccdt_build()
+add_dependencies(build_bundled_libs cdt)
 
 #
 # Third-Party misc
@@ -578,6 +598,47 @@ endif()
 include(BuildMisc)
 libmisc_build()
 add_dependencies(build_bundled_libs misc)
+
+#
+# libunwind
+#
+
+if(ENABLE_BACKTRACE)
+    if(NOT HAVE_FORCE_ALIGN_ARG_POINTER_ATTR)
+        message(SEND_ERROR "backtrace feature requires \
+                            `force_align_arg_pointer` function attribute \
+                            support from C/C++ compiler")
+    endif()
+
+    if(NOT HAVE_CFI_ASM)
+        message(SEND_ERROR "backtrace feature requires CFI assembly support \
+                            from C/C++ compiler")
+    endif()
+
+    if(ENABLE_BUNDLED_LIBUNWIND)
+        if(APPLE)
+            message(SEND_ERROR "libunwind does not support macOS")
+        endif()
+        if(NOT HAVE_STDATOMIC_H)
+            message(SEND_ERROR "building bundled libunwind requires stdatomic.h \
+                                support from C compiler")
+        endif()
+
+        include(BuildLibUnwind)
+        libunwind_build()
+        add_dependencies(build_bundled_libs
+                         bundled-libunwind
+                         bundled-libunwind-platform)
+    else()
+        find_package(LibUnwind MODULE REQUIRED)
+    endif()
+    if(NOT APPLE AND NOT ENABLE_BUNDLED_LIBUNWIND AND
+        LIBUNWIND_VERSION VERSION_LESS "1.3" AND
+        ${CMAKE_SYSTEM_PROCESSOR} STREQUAL "aarch64")
+        message(SEND_ERROR "versions of libunwind earlier than 1.3.0 are \
+                            broken on AARCH64 architecture")
+    endif()
+endif()
 
 # cpack config. called package.cmake to avoid
 # conflicts with the global CPack.cmake (On MacOS X
@@ -670,7 +731,8 @@ set(options PACKAGE VERSION BUILD C_COMPILER CXX_COMPILER C_FLAGS CXX_FLAGS
     ENABLE_DIST
     ENABLE_BUNDLED_LIBCURL
     ENABLE_BUNDLED_LIBYAML
-    ENABLE_BUNDLED_MSGPUCK)
+    ENABLE_BUNDLED_MSGPUCK
+    ENABLE_BUNDLED_LIBUNWIND)
 foreach(option IN LISTS options)
     if (NOT DEFINED ${option})
         set(value "${TARANTOOL_${option}}")

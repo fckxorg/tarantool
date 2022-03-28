@@ -30,6 +30,7 @@
  */
 #include "session.h"
 #include "fiber.h"
+#include "fiber_cond.h"
 #include "memory.h"
 #include "assoc.h"
 #include "trigger.h"
@@ -37,6 +38,8 @@
 #include "error.h"
 #include "tt_static.h"
 #include "sql_stmt_cache.h"
+#include "watcher.h"
+#include "on_shutdown.h"
 
 const char *session_type_strs[] = {
 	"background",
@@ -67,6 +70,15 @@ uint32_t default_flags = 0;
 
 struct mempool session_pool;
 
+/**
+ * List of sessions blocking shutdown, linked by session::in_shutdown_list.
+ * The shutdown trigger callback won't return until it's empty.
+ */
+static RLIST_HEAD(shutdown_list);
+
+/** Signalled when shutdown_list becomes empty. */
+static struct fiber_cond shutdown_list_empty_cond;
+
 RLIST_HEAD(session_on_connect);
 RLIST_HEAD(session_on_disconnect);
 RLIST_HEAD(session_on_auth);
@@ -95,6 +107,111 @@ session_on_stop(struct trigger *trigger, void * /* event */)
 	return 0;
 }
 
+/**
+ * Watcher registered for a session. Unregistered when the session is closed.
+ */
+struct session_watcher {
+	struct watcher base;
+	struct session *session;
+	session_notify_f cb;
+};
+
+static void
+session_watcher_run_f(struct watcher *base)
+{
+	struct session_watcher *watcher = (struct session_watcher *)base;
+	size_t key_len;
+	const char *key = watcher_key(base, &key_len);
+	const char *data_end;
+	const char *data = watcher_data(base, &data_end);
+	watcher->cb(watcher->session, key, key_len, data, data_end);
+}
+
+void
+session_watch(struct session *session, const char *key,
+	      size_t key_len, session_notify_f cb)
+{
+	/* Look up a watcher for the specified key in this session. */
+	struct mh_strnptr_t *h = session->watchers;
+	if (h == NULL)
+		h = session->watchers = mh_strnptr_new();
+	uint32_t key_hash = mh_strn_hash(key, key_len);
+	struct mh_strnptr_key_t k = {key, (uint32_t)key_len, key_hash};
+	mh_int_t i = mh_strnptr_find(h, &k, NULL);
+	/* If a watcher is already registered, acknowledge a notification. */
+	if (i != mh_end(h)) {
+		struct session_watcher *watcher =
+			(struct session_watcher *)mh_strnptr_node(h, i)->val;
+		watcher_ack(&watcher->base);
+		return;
+	}
+	/* Otherwise register a new watcher. */
+	struct session_watcher *watcher =
+		(struct session_watcher *)xmalloc(sizeof(*watcher));
+	watcher->session = session;
+	watcher->cb = cb;
+	box_register_watcher(key, key_len, session_watcher_run_f,
+			     (watcher_destroy_f)free, WATCHER_EXPLICIT_ACK,
+			     &watcher->base);
+	key = watcher_key(&watcher->base, &key_len);
+	struct mh_strnptr_node_t n = {
+		key, (uint32_t)key_len, key_hash, watcher
+	};
+	mh_strnptr_put(h, &n, NULL, NULL);
+}
+
+void
+session_unwatch(struct session *session, const char *key,
+		size_t key_len)
+{
+	struct mh_strnptr_t *h = session->watchers;
+	if (h == NULL)
+		return;
+	mh_int_t i = mh_strnptr_find_str(h, key, key_len);
+	if (i == mh_end(h))
+		return;
+	struct session_watcher *watcher =
+		(struct session_watcher *)mh_strnptr_node(h, i)->val;
+	mh_strnptr_del(h, i, NULL);
+	watcher_unregister(&watcher->base);
+}
+
+/**
+ * Returns true if the session is watching the given key.
+ * They key string is zero-terminated.
+ */
+static bool
+session_is_watching(struct session *session, const char *key)
+{
+	struct mh_strnptr_t *h = session->watchers;
+	if (h == NULL)
+		return false;
+	uint32_t key_len = strlen(key);
+	uint32_t key_hash = mh_strn_hash(key, key_len);
+	struct mh_strnptr_key_t k = {key, key_len, key_hash};
+	return mh_strnptr_find(h, &k, NULL) != mh_end(h);
+}
+
+/**
+ * Unregisters all watchers registered in this session.
+ * Called when the session is closed.
+ */
+static void
+session_unregister_all_watchers(struct session *session)
+{
+	struct mh_strnptr_t *h = session->watchers;
+	if (h == NULL)
+		return;
+	mh_int_t i;
+	mh_foreach(h, i) {
+		struct session_watcher *watcher =
+			(struct session_watcher *)mh_strnptr_node(h, i)->val;
+		watcher_unregister(&watcher->base);
+	}
+	mh_strnptr_delete(h);
+	session->watchers = NULL;
+}
+
 static int
 closed_session_push(struct session *session, struct port *port)
 {
@@ -114,6 +231,10 @@ void
 session_close(struct session *session)
 {
 	session->vtab = &closed_session_vtab;
+	session_unregister_all_watchers(session);
+	rlist_del_entry(session, in_shutdown_list);
+	if (rlist_empty(&session->in_shutdown_list))
+		fiber_cond_broadcast(&shutdown_list_empty_cond);
 }
 
 void
@@ -142,20 +263,15 @@ session_create(enum session_type type)
 	session->sql_flags = default_flags;
 	session->sql_default_engine = SQL_STORAGE_ENGINE_MEMTX;
 	session->sql_stmts = NULL;
+	session->watchers = NULL;
+	rlist_create(&session->in_shutdown_list);
 
 	/* For on_connect triggers. */
 	credentials_create(&session->credentials, guest_user);
 	struct mh_i64ptr_node_t node;
 	node.key = session->id;
 	node.val = session;
-
-	mh_int_t k = mh_i64ptr_put(session_registry, &node, NULL, NULL);
-
-	if (k == mh_end(session_registry)) {
-		mempool_free(&session_pool, session);
-		diag_set(OutOfMemory, 0, "session hash", "new session");
-		return NULL;
-	}
+	mh_i64ptr_put(session_registry, &node, NULL, NULL);
 	return session;
 }
 
@@ -188,18 +304,13 @@ session_check_stmt_id(struct session *session, uint32_t stmt_id)
 	return i != mh_end(session->sql_stmts);
 }
 
-int
+void
 session_add_stmt_id(struct session *session, uint32_t id)
 {
 	if (session->sql_stmts == NULL) {
 		session->sql_stmts = mh_i32ptr_new();
-		if (session->sql_stmts == NULL) {
-			diag_set(OutOfMemory, 0, "mh_i32ptr_new",
-				 "session stmt hash");
-			return -1;
-		}
 	}
-	return sql_session_stmt_hash_add_id(session->sql_stmts, id);
+	sql_session_stmt_hash_add_id(session->sql_stmts, id);
 }
 
 void
@@ -256,6 +367,9 @@ session_run_on_auth_triggers(const struct on_auth_trigger_ctx *result)
 void
 session_destroy(struct session *session)
 {
+	/* Watchers are unregistered in session_close(). */
+	assert(session->watchers == NULL);
+	assert(rlist_empty(&session->in_shutdown_list));
 	session_storage_cleanup(session->id);
 	struct mh_i64ptr_node_t node = { session->id, NULL };
 	mh_i64ptr_remove(session_registry, &node, NULL);
@@ -277,15 +391,39 @@ session_find(uint64_t sid)
 extern "C" void
 session_settings_init(void);
 
+/**
+ * Waits for all sessions that subscribed to 'box.shutdown' event to close.
+ */
+static int
+session_on_shutdown_f(void *arg)
+{
+	(void)arg;
+	fiber_set_name(fiber_self(), "session.shutdown");
+	struct mh_i64ptr_t *h = session_registry;
+	mh_int_t i;
+	mh_foreach(h, i) {
+		struct session *session =
+			(struct session *)mh_i64ptr_node(h, i)->val;
+		if (session_is_watching(session, "box.shutdown")) {
+			rlist_add_entry(&shutdown_list, session,
+					in_shutdown_list);
+		}
+	}
+	while (!rlist_empty(&shutdown_list))
+		fiber_cond_wait(&shutdown_list_empty_cond);
+	return 0;
+}
+
 void
 session_init(void)
 {
 	session_registry = mh_i64ptr_new();
-	if (session_registry == NULL)
-		panic("out of memory");
 	mempool_create(&session_pool, &cord()->slabc, sizeof(struct session));
 	credentials_create(&admin_credentials, admin_user);
 	session_settings_init();
+	fiber_cond_create(&shutdown_list_empty_cond);
+	if (box_on_shutdown(NULL, session_on_shutdown_f, NULL) != 0)
+		panic("failed to set session shutdown trigger");
 }
 
 void

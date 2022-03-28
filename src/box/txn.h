@@ -91,6 +91,16 @@ enum txn_flag {
 	 * example, when applier receives snapshot from master.
 	 */
 	TXN_FORCE_ASYNC = 0x40,
+	/**
+	 * Transaction was aborted when other transaction was
+	 * committed due to conflict.
+	 */
+	TXN_IS_CONFLICTED = 0x80,
+	/*
+	 * Transaction has been aborted by timeout so should be
+	 * rolled back at commit.
+	 */
+	TXN_IS_ABORTED_BY_TIMEOUT = 0x100,
 };
 
 enum {
@@ -180,6 +190,17 @@ enum txn_status {
 	TXN_ABORTED,
 };
 
+
+/**
+ * Structure which contains pointers to the tuples,
+ * that are used in rollback. Currently used only in
+ * memxt engine.
+ */
+struct txn_stmt_rollback_info {
+	struct tuple *old_tuple;
+	struct tuple *new_tuple;
+};
+
 /**
  * A single statement of a multi-statement
  * transaction: undo and redo info.
@@ -195,6 +216,8 @@ struct txn_stmt {
 	struct space *space;
 	struct tuple *old_tuple;
 	struct tuple *new_tuple;
+	/** Structure, which contains tuples for rollback. */
+	struct txn_stmt_rollback_info rollback_info;
 	/**
 	 * If new_tuple != NULL and this transaction was not prepared,
 	 * this member holds added story of the new_tuple.
@@ -428,6 +451,17 @@ struct txn {
 	struct rlist in_all_txs;
 	/** True in case transaction provides any DDL change. */
 	bool is_schema_changed;
+	/** Timeout for transaction, or TIMEOUT_INFINITY if not set. */
+	double timeout;
+	/**
+	 * Timer that is alarmed if the transaction did not have time
+	 * to complete within the timeout specified when it was created.
+	 */
+	struct ev_timer *rollback_timer;
+	/**
+	 * Nesting level of space on_replace triggers for current txn.
+	 */
+	int space_on_replace_triggers_depth;
 };
 
 static inline bool
@@ -435,6 +469,12 @@ txn_has_flag(struct txn *txn, enum txn_flag flag)
 {
 	assert((flag & (flag - 1)) == 0);
 	return (txn->flags & flag) != 0;
+}
+
+static inline bool
+txn_has_any_of_flags(struct txn *txn, enum txn_flag flags)
+{
+	return (txn->flags & flags) != 0;
 }
 
 static inline void
@@ -615,6 +655,14 @@ txn_stmt_on_rollback(struct txn_stmt *stmt, struct trigger *trigger)
 	assert(trigger->destroy == NULL);
 	trigger_add(&stmt->on_rollback, trigger);
 }
+
+/**
+ * Save and ref @a old_tuple and @a new_tuple in special structure
+ * inside @a stmt. Later this tuples will be used in case of rollback.
+ */
+void
+txn_stmt_prepare_rollback_info(struct txn_stmt *stmt, struct tuple *old_tuple,
+			       struct tuple *new_tuple);
 
 /*
  * Return the total number of rows committed in the txn.
@@ -819,6 +867,18 @@ box_txn_rollback(void);
  */
 API_EXPORT void *
 box_txn_alloc(size_t size);
+
+/**
+ * Set @a timeout for transaction, when it expires, transaction
+ * will be rolled back.
+ *
+ * @retval 0 if success
+ * @retval -1 if timeout is less than or equal to 0, there is
+ *            no current transaction or rollback timer for
+ *            current transaction is already started.
+ */
+API_EXPORT int
+box_txn_set_timeout(double timeout);
 
 /** \endcond public */
 

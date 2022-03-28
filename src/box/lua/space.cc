@@ -35,6 +35,7 @@
 #include "box/sql/sqlLimit.h"
 #include "lua/utils.h"
 #include "lua/trigger.h"
+#include "box/box.h"
 
 extern "C" {
 	#include <lua.h>
@@ -48,6 +49,7 @@ extern "C" {
 #include "box/schema.h"
 #include "box/user_def.h"
 #include "box/tuple.h"
+#include "box/tuple_constraint.h"
 #include "box/txn.h"
 #include "box/sequence.h"
 #include "box/coll_id_cache.h"
@@ -108,6 +110,25 @@ lbox_pop_txn_stmt(struct lua_State *L, int nret, void *event)
 }
 
 /**
+ * Wrapper over lbox_pop_txn_stmt that checks tuple's format.
+ */
+static int
+lbox_pop_txn_stmt_and_check_format(struct lua_State *L, int nret, void *event)
+{
+	struct txn_stmt *stmt = txn_current_stmt((struct txn *) event);
+	struct tuple *tuple = stmt->new_tuple;
+	/*
+	 * Since upgrade from pre-1.7.5 versions passes tuple with not suitable
+	 * format to before_replace triggers during recovery, we need to disable
+	 * format validation until box is configured.
+	 */
+	if (box_is_configured() && tuple != NULL &&
+	    tuple_validate(stmt->space->format, tuple) != 0)
+		return -1;
+	return lbox_pop_txn_stmt(L, nret, event);
+}
+
+/**
  * Set/Reset/Get space.on_replace trigger
  */
 static int
@@ -146,7 +167,8 @@ lbox_space_before_replace(struct lua_State *L)
 	lua_pop(L, 1);
 
 	return lbox_trigger_reset(L, 3, &space->before_replace,
-				  lbox_push_txn_stmt, lbox_pop_txn_stmt);
+				  lbox_push_txn_stmt,
+				  lbox_pop_txn_stmt_and_check_format);
 }
 
 /**
@@ -213,6 +235,97 @@ lbox_push_ck_constraint(struct lua_State *L, struct space *space, int i)
 }
 
 /**
+ * Create constraint field in lua space object, given by index i in lua stack.
+ * If the space has no constraints, there will be no constraint field.
+ */
+static void
+lbox_push_space_constraint(struct lua_State *L, struct space *space, int i)
+{
+	assert(i >= 0);
+	struct tuple_format *fmt = space->format;
+	uint32_t constraint_count = 0;
+	for (size_t k = 0; k < fmt->constraint_count; k++) {
+		struct tuple_constraint *c = &fmt->constraint[k];
+		if (c->def.type == CONSTR_FUNC)
+			constraint_count++;
+	}
+	if (constraint_count == 0) {
+		/* No constraints - no field. */
+		lua_pushnil(L);
+		lua_setfield(L, i, "constraint");
+		return;
+	}
+
+	lua_newtable(L);
+	for (size_t k = 0; k < fmt->constraint_count; k++) {
+		if (fmt->constraint[k].def.type != CONSTR_FUNC)
+			continue;
+		lua_pushnumber(L, fmt->constraint[k].def.func.id);
+		lua_setfield(L, -2, fmt->constraint[k].def.name);
+	}
+	lua_setfield(L, i, "constraint");
+}
+
+/**
+ * Helper function of lbox_push_space_foreign_key.
+ * Push a value @a def to the top of lua stack @a L.
+ */
+static void
+lbox_push_field_id(struct lua_State *L,
+		   struct tuple_constraint_field_id *def)
+{
+	if (def->name_len == 0)
+		lua_pushnumber(L, def->id);
+	else
+		lua_pushstring(L, def->name);
+}
+
+/**
+ * Create foreign_key field in lua space object, given by index i in lua stack.
+ * If the space has no foreign keys, there will be no foreign_key field.
+ */
+static void
+lbox_push_space_foreign_key(struct lua_State *L, struct space *space, int i)
+{
+	assert(i >= 0);
+	struct tuple_format *fmt = space->format;
+	uint32_t foreign_key_count = 0;
+	for (size_t k = 0; k < fmt->constraint_count; k++) {
+		struct tuple_constraint *c = &fmt->constraint[k];
+		if (c->def.type == CONSTR_FKEY)
+			foreign_key_count++;
+	}
+	if (foreign_key_count == 0) {
+		/* No foreign keys - no field. */
+		lua_pushnil(L);
+		lua_setfield(L, i, "foreign_key");
+		return;
+	}
+
+	lua_newtable(L);
+	for (size_t k = 0; k < fmt->constraint_count; k++) {
+		struct tuple_constraint *c = &fmt->constraint[k];
+		if (c->def.type != CONSTR_FKEY)
+			continue;
+
+		lua_newtable(L);
+		lua_pushnumber(L, c->def.fkey.space_id);
+		lua_setfield(L, -2, "space");
+		lua_newtable(L);
+		for (uint32_t j = 0; j < c->def.fkey.field_mapping_size; j++) {
+			struct tuple_constraint_fkey_field_mapping *m =
+				&c->def.fkey.field_mapping[j];
+			lbox_push_field_id(L, &m->local_field);
+			lbox_push_field_id(L, &m->foreign_field);
+			lua_settable(L, -3);
+		}
+		lua_setfield(L, -2, "field");
+		lua_setfield(L, -2, fmt->constraint[k].def.name);
+	}
+	lua_setfield(L, i, "foreign_key");
+}
+
+/**
  * Make a single space available in Lua,
  * via box.space[] array.
  *
@@ -270,6 +383,12 @@ lbox_fillspace(struct lua_State *L, struct space *space, int i)
 	lua_pushstring(L, "before_replace");
 	lua_pushcfunction(L, lbox_space_before_replace);
 	lua_settable(L, i);
+
+	if (space_is_vinyl(space)) {
+		lua_pushstring(L, "defer_deletes");
+		lua_pushboolean(L, space->def->opts.defer_deletes);
+		lua_settable(L, i);
+	}
 
 	lua_getfield(L, i, "index");
 	if (lua_isnil(L, -1)) {
@@ -445,6 +564,8 @@ lbox_fillspace(struct lua_State *L, struct space *space, int i)
 	lua_pop(L, 1); /* pop the index field */
 
 	lbox_push_ck_constraint(L, space, i);
+	lbox_push_space_constraint(L, space, i);
+	lbox_push_space_foreign_key(L, space, i);
 
 	lua_getfield(L, LUA_GLOBALSINDEX, "box");
 	lua_pushstring(L, "schema");

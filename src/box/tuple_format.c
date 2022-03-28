@@ -28,11 +28,12 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include "tuple_format.h"
 #include "bit/bit.h"
 #include "fiber.h"
 #include "json/json.h"
-#include "tuple_format.h"
 #include "coll_id_cache.h"
+#include "tuple_constraint.h"
 #include "tt_static.h"
 
 #include <PMurHash.h>
@@ -82,6 +83,16 @@ tuple_format_cmp(const struct tuple_format *format1,
 	if (a->total_field_count != b->total_field_count)
 		return a->total_field_count - b->total_field_count;
 
+	if (a->constraint_count != b->constraint_count)
+		return (int)a->constraint_count - (int)b->constraint_count;
+	for (uint32_t i = 0; i < a->constraint_count; i++) {
+		int tmp = tuple_constraint_cmp(&a->constraint[i],
+					       &b->constraint[i],
+					       false);
+		if (tmp != 0)
+			return tmp;
+	}
+
 	struct tuple_field *field_a;
 	json_tree_foreach_entry_preorder(field_a, &a->fields.root,
 					 struct tuple_field, token) {
@@ -97,6 +108,12 @@ tuple_format_cmp(const struct tuple_format *format1,
 		if (field_a->is_key_part != field_b->is_key_part)
 			return (int)field_a->is_key_part -
 				(int)field_b->is_key_part;
+		/*
+		 * Format comparison is used for non-space formats only,
+		 * so there must be no constraints in both formats.
+		 */
+		assert(field_a->constraint_count == 0);
+		assert(field_b->constraint_count == 0);
 	}
 
 	return tuple_dictionary_cmp(format1->dict, format2->dict);
@@ -120,6 +137,11 @@ tuple_format_hash(struct tuple_format *format)
 		TUPLE_FIELD_MEMBER_HASH(f, coll_id, h, carry, size)
 		TUPLE_FIELD_MEMBER_HASH(f, nullable_action, h, carry, size)
 		TUPLE_FIELD_MEMBER_HASH(f, is_key_part, h, carry, size)
+		/*
+		 * We could calculate hash sum of constraints, but on the other
+		 * hand the hash is used only for non-space formats which are
+		 * never has constraints.
+		 */
 	}
 #undef TUPLE_FIELD_MEMBER_HASH
 	size += tuple_dictionary_hash_process(format->dict, &h, &carry);
@@ -155,6 +177,8 @@ tuple_field_new(void)
 	field->coll_id = COLL_NONE;
 	field->nullable_action = ON_CONFLICT_ACTION_NONE;
 	field->multikey_required_fields = NULL;
+	field->constraint_count = 0;
+	field->constraint = NULL;
 	return field;
 }
 
@@ -162,11 +186,14 @@ static void
 tuple_field_delete(struct tuple_field *field)
 {
 	free(field->multikey_required_fields);
+	for (uint32_t i = 0; i < field->constraint_count; i++)
+		field->constraint[i].destroy(&field->constraint[i]);
+	free(field->constraint);
 	free(field);
 }
 
 /** Return path to a tuple field. Used for error reporting. */
-static const char *
+const char *
 tuple_field_path(const struct tuple_field *field,
 		 const struct tuple_format *format)
 {
@@ -433,9 +460,11 @@ tuple_format_use_key_part(struct tuple_format *format, uint32_t field_count,
  * definitions.
  */
 static int
-tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
+tuple_format_create(struct tuple_format *format, struct key_def *const *keys,
 		    uint16_t key_count, const struct field_def *fields,
-		    uint32_t field_count)
+		    uint32_t field_count,
+		    struct tuple_constraint_def *constraint_def,
+		    uint32_t constraint_count)
 {
 	format->min_field_count =
 		tuple_format_min_field_count(keys, key_count, fields,
@@ -462,6 +491,14 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 		}
 		field->coll = coll;
 		field->coll_id = cid;
+		field->compression_type = fields[i].compression_type;
+		if (field->compression_type != COMPRESSION_TYPE_NONE)
+			format->is_compressed = true;
+
+		field->constraint =
+			tuple_constraint_array_new(fields[i].constraint_def,
+						   fields[i].constraint_count);
+		field->constraint_count = fields[i].constraint_count;
 	}
 
 	int current_slot = 0;
@@ -500,7 +537,7 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 	}
 	format->field_map_size = field_map_size;
 
-	size_t required_fields_sz = bitmap_size(format->total_field_count);
+	size_t required_fields_sz = BITMAP_SIZE(format->total_field_count);
 	format->required_fields = calloc(1, required_fields_sz);
 	if (format->required_fields == NULL) {
 		diag_set(OutOfMemory, required_fields_sz,
@@ -549,6 +586,10 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 			bit_set(required_fields, field->id);
 	}
 out:
+	format->constraint_count = constraint_count;
+	format->constraint = tuple_constraint_array_new(constraint_def,
+							constraint_count);
+
 	format->hash = tuple_format_hash(format);
 	return 0;
 }
@@ -649,12 +690,7 @@ tuple_format_alloc(struct key_def * const *keys, uint16_t key_count,
 			 "tuple format");
 		return NULL;
 	}
-	if (json_tree_create(&format->fields) != 0) {
-		diag_set(OutOfMemory, 0, "json_lexer_create",
-			 "tuple field tree");
-		free(format);
-		return NULL;
-	}
+	json_tree_create(&format->fields);
 	for (uint32_t fieldno = 0; fieldno < field_count; fieldno++) {
 		struct tuple_field *field = tuple_field_new();
 		if (field == NULL)
@@ -688,6 +724,8 @@ tuple_format_alloc(struct key_def * const *keys, uint16_t key_count,
 	format->exact_field_count = 0;
 	format->min_field_count = 0;
 	format->epoch = 0;
+	format->constraint_count = 0;
+	format->constraint = NULL;
 	return format;
 error:
 	tuple_format_destroy_fields(format);
@@ -702,6 +740,7 @@ tuple_format_destroy(struct tuple_format *format)
 	free(format->required_fields);
 	tuple_format_destroy_fields(format);
 	tuple_dictionary_unref(format->dict);
+	free(format->constraint);
 }
 
 /**
@@ -718,8 +757,7 @@ tuple_format_reuse(struct tuple_format **p_format)
 {
 	struct tuple_format *format = *p_format;
 	assert(format->is_reusable);
-	mh_int_t key = mh_tuple_format_find(tuple_formats_hash, format,
-					    NULL);
+	mh_int_t key = mh_tuple_format_find(tuple_formats_hash, format, NULL);
 	if (key != mh_end(tuple_formats_hash)) {
 		struct tuple_format **entry = mh_tuple_format_node(
 			tuple_formats_hash, key);
@@ -733,21 +771,12 @@ tuple_format_reuse(struct tuple_format **p_format)
 
 /**
  * Insert a reusable format into the hash table.
- * @retval 0 on success, -1 in case of error.
  */
-static int
-tuple_format_add_to_hash(struct tuple_format *format)
+static void
+tuple_format_add_to_hash(const struct tuple_format *format)
 {
 	assert(format->is_reusable);
-	mh_int_t key = mh_tuple_format_put(tuple_formats_hash,
-					   (const struct tuple_format **)&format,
-					   NULL, NULL);
-	if (key == mh_end(tuple_formats_hash)) {
-		diag_set(OutOfMemory, 0, "tuple_format_add_to_hash",
-			 "tuple formats hash entry");
-		return -1;
-	}
-	return 0;
+	mh_tuple_format_put(tuple_formats_hash, &format, NULL, NULL);
 }
 
 static void
@@ -773,7 +802,8 @@ tuple_format_new(struct tuple_format_vtab *vtab, void *engine,
 		 const struct field_def *space_fields,
 		 uint32_t space_field_count, uint32_t exact_field_count,
 		 struct tuple_dictionary *dict, bool is_temporary,
-		 bool is_reusable)
+		 bool is_reusable, struct tuple_constraint_def *constraint_def,
+		 uint32_t constraint_count)
 {
 	struct tuple_format *format =
 		tuple_format_alloc(keys, key_count, space_field_count, dict);
@@ -786,24 +816,75 @@ tuple_format_new(struct tuple_format_vtab *vtab, void *engine,
 	format->engine = engine;
 	format->is_temporary = is_temporary;
 	format->is_reusable = is_reusable;
+	/* This flag is set in `tuple_format_create` function. */
+	format->is_compressed = false;
 	format->exact_field_count = exact_field_count;
 	format->epoch = ++formats_epoch;
 	if (tuple_format_create(format, keys, key_count, space_fields,
-				space_field_count) < 0)
+				space_field_count,
+				constraint_def, constraint_count) < 0)
 		goto err;
 	if (is_reusable && tuple_format_reuse(&format))
 		return format;
 	if (tuple_format_register(format) < 0)
 		goto err;
-	if (is_reusable && tuple_format_add_to_hash(format) < 0) {
-		tuple_format_deregister(format);
-		goto err;
-	}
+	if (is_reusable)
+		tuple_format_add_to_hash(format);
 	return format;
 err:
 	tuple_format_destroy(format);
 	free(format);
 	return NULL;
+}
+
+/**
+ * Check that @a constr1_count constraints @a constr1 are tolerant to any
+ * tuple that satisfy @a constr2_count constraints @a constr2.
+ */
+static bool
+tuple_constraints1_can_store_constraints2_tuples(
+	const struct tuple_constraint *constr1, uint32_t constr1_count,
+	const struct tuple_constraint *constr2, uint32_t constr2_count)
+{
+	/*
+	 * Don't allow adding more constraints.
+	 * Don't look at constraint names, allowing a user to rename
+	 * constraints without rebuilding.
+	 */
+	for (uint32_t i = 0; i < constr1_count; i++) {
+		const struct tuple_constraint *c1 = &constr1[i];
+		/* Look for c1 in the second array of constraints. */
+		bool found = false;
+		for (uint32_t j = 0; j < constr2_count; j++) {
+			const struct tuple_constraint *c2 = &constr2[j];
+			if (tuple_constraint_cmp(c1, c2, true) != 0)
+				continue;
+			found = true;
+			break;
+		}
+		/* If not found than constr1 is wider than constr2. */
+		if (!found)
+			return false;
+	}
+	return true;
+}
+
+bool
+tuple_format_is_compatible_with_key_def(struct tuple_format *format,
+					struct key_def *key_def)
+{
+        for (uint32_t i = 0; i < tuple_format_field_count(format); i++) {
+        	struct tuple_field *field =
+                        tuple_format_field(format, i);
+        	if (field->compression_type == COMPRESSION_TYPE_NONE)
+			continue;
+		if (key_def_find_by_fieldno(key_def, i)) {
+			diag_set(ClientError, ER_UNSUPPORTED,
+				 "Indexed field", "compression");
+			return false;
+		}
+        }
+        return true;
 }
 
 bool
@@ -812,6 +893,14 @@ tuple_format1_can_store_format2_tuples(struct tuple_format *format1,
 {
 	if (format1->exact_field_count != format2->exact_field_count)
 		return false;
+	/* Check constraints compatibility. */
+	if (!tuple_constraints1_can_store_constraints2_tuples(
+		format1->constraint,
+		format1->constraint_count,
+		format2->constraint,
+		format2->constraint_count))
+		return false;
+
 	struct tuple_field *field1;
 	json_tree_foreach_entry_preorder(field1, &format1->fields.root,
 					 struct tuple_field, token) {
@@ -846,6 +935,12 @@ tuple_format1_can_store_format2_tuples(struct tuple_format *format1,
 		if (tuple_field_is_nullable(field2) &&
 		    !tuple_field_is_nullable(field1))
 			return false;
+
+		/* Check field constraints compatibility. */
+		if (!tuple_constraints1_can_store_constraints2_tuples(
+			field1->constraint, field1->constraint_count,
+			field2->constraint, field2->constraint_count))
+			return false;
 	}
 	return true;
 }
@@ -854,6 +949,41 @@ static int
 tuple_format_required_fields_validate(struct tuple_format *format,
 				      void *required_fields,
 				      uint32_t required_fields_sz);
+
+/**
+ * Check constraints of one particular @a field.
+ */
+static int
+tuple_field_check_constraint(const struct tuple_field *field,
+			     const char *mp_data, const char *mp_data_end)
+{
+	if (tuple_field_is_nullable(field) && mp_typeof(*mp_data) == MP_NIL)
+		return 0;
+	for (uint32_t i = 0; i < field->constraint_count; i++) {
+		struct tuple_constraint *c = &field->constraint[i];
+		if (c->check(c, mp_data, mp_data_end, field) != 0)
+			return -1;
+	}
+	return 0;
+}
+
+/**
+ * Check whole tuple constraints. Note that field constraints are not checked.
+ */
+static int
+tuple_check_constraint(struct tuple_format *format, const char *mp_data)
+{
+	if (format->constraint_count == 0)
+		return 0;
+	const char *mp_data_end = mp_data;
+	mp_next(&mp_data_end);
+	for (uint32_t i = 0; i < format->constraint_count; i++) {
+		struct tuple_constraint *c = &format->constraint[i];
+		if (c->check(c, mp_data, mp_data_end, NULL) != 0)
+			return -1;
+	}
+	return 0;
+}
 
 static int
 tuple_field_map_create_plain(struct tuple_format *format, const char *tuple,
@@ -873,7 +1003,7 @@ tuple_field_map_create_plain(struct tuple_format *format, const char *tuple,
 				  tuple_format_field_count(format));
 
 	void *required_fields = NULL;
-	uint32_t required_fields_sz = bitmap_size(format->total_field_count);
+	uint32_t required_fields_sz = BITMAP_SIZE(format->total_field_count);
 
 	if (unlikely(defined_field_count == 0)) {
 		required_fields = format->required_fields;
@@ -888,7 +1018,10 @@ tuple_field_map_create_plain(struct tuple_format *format, const char *tuple,
 
 	struct tuple_field *field;
 	struct json_token **token = format->fields.root.children;
-	for (uint32_t i = 0; i < defined_field_count; i++, token++, mp_next(&pos)) {
+	const char *next_pos = pos;
+	for (uint32_t i = 0; i < defined_field_count;
+	     i++, token++, pos = next_pos) {
+		mp_next(&next_pos);
 		field = json_tree_entry(*token, struct tuple_field, token);
 		if (validate) {
 			bool nullable = tuple_field_is_nullable(field);
@@ -900,6 +1033,9 @@ tuple_field_map_create_plain(struct tuple_format *format, const char *tuple,
 					 mp_type_strs[mp_typeof(*pos)]);
 				return -1;
 			}
+			if (tuple_field_check_constraint(field, pos,
+							 next_pos) != 0)
+				return -1;
 			bit_clear(required_fields, field->id);
 		}
 		if (field->offset_slot != TUPLE_OFFSET_SLOT_NIL &&
@@ -927,6 +1063,10 @@ tuple_field_map_create(struct tuple_format *format, const char *tuple,
 	if (field_map_builder_create(builder, format->field_map_size,
 				     region) != 0)
 		return -1;
+
+	if (tuple_check_constraint(format, tuple) != 0)
+		return -1;
+
 	if (tuple_format_field_count(format) == 0)
 		return 0; /* Nothing to initialize */
 
@@ -981,16 +1121,10 @@ tuple_format_min_field_count(struct key_def * const *keys, uint16_t key_count,
 	return min_field_count;
 }
 
-int
+void
 tuple_format_init()
 {
 	tuple_formats_hash = mh_tuple_format_new();
-	if (tuple_formats_hash == NULL) {
-		diag_set(OutOfMemory, sizeof(struct mh_tuple_format_t), "malloc",
-			 "tuple format hash");
-		return -1;
-	}
-	return 0;
 }
 
 /** Destroy tuple format subsystem and free resourses */
@@ -1054,7 +1188,7 @@ tuple_format_iterator_create(struct tuple_format_iterator *it,
 
 	uint32_t frames_sz = format->fields_depth * sizeof(struct mp_frame);
 	if (validate)
-		it->required_fields_sz = bitmap_size(format->total_field_count);
+		it->required_fields_sz = BITMAP_SIZE(format->total_field_count);
 	uint32_t total_sz = frames_sz + 2 * it->required_fields_sz;
 	struct mp_frame *frames = region_aligned_alloc(region, total_sz,
 						       alignof(frames[0]));
@@ -1251,6 +1385,9 @@ tuple_format_iterator_next(struct tuple_format_iterator *it,
 			 mp_type_strs[mp_typeof(*entry->data)]);
 		return -1;
 	}
+	if (tuple_field_check_constraint(field, entry->data,
+					 entry->data_end) != 0)
+		return -1;
 	bit_clear(it->multikey_frame != NULL ?
 		  it->multikey_required_fields : it->required_fields, field->id);
 	return 0;

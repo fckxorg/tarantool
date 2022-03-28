@@ -38,6 +38,7 @@
 #include "xrow.h"
 #include "errinj.h"
 #include "iproto_constants.h"
+#include "box.h"
 
 double too_long_threshold;
 
@@ -52,6 +53,38 @@ txn_on_stop(struct trigger *trigger, void *event);
 
 static int
 txn_on_yield(struct trigger *trigger, void *event);
+
+static inline enum box_error_code
+txn_flags_to_error_code(struct txn *txn)
+{
+	if (txn_has_flag(txn, TXN_IS_CONFLICTED))
+		return ER_TRANSACTION_CONFLICT;
+	else if (txn_has_flag(txn, TXN_IS_ABORTED_BY_YIELD))
+		return ER_TRANSACTION_YIELD;
+	else if (txn_has_flag(txn, TXN_IS_ABORTED_BY_TIMEOUT))
+		return ER_TRANSACTION_TIMEOUT;
+	return ER_UNKNOWN;
+}
+
+static inline int
+txn_check_can_continue(struct txn *txn)
+{
+	enum txn_flag flags =
+		TXN_IS_CONFLICTED | TXN_IS_ABORTED_BY_YIELD |
+		TXN_IS_ABORTED_BY_TIMEOUT;
+	if (txn_has_any_of_flags(txn, flags)) {
+		diag_set(ClientError, txn_flags_to_error_code(txn));
+		return -1;
+	}
+	return 0;
+}
+
+static inline void
+txn_set_timeout(struct txn *txn, double timeout)
+{
+	assert(timeout > 0);
+	txn->timeout = timeout;
+}
 
 static int
 txn_add_redo(struct txn *txn, struct txn_stmt *stmt, struct request *request)
@@ -108,6 +141,8 @@ txn_stmt_new(struct region *region)
 	stmt->space = NULL;
 	stmt->old_tuple = NULL;
 	stmt->new_tuple = NULL;
+	stmt->rollback_info.old_tuple = NULL;
+	stmt->rollback_info.new_tuple = NULL;
 	stmt->add_story = NULL;
 	stmt->del_story = NULL;
 	stmt->next_in_del_list = NULL;
@@ -127,6 +162,22 @@ txn_stmt_destroy(struct txn_stmt *stmt)
 		tuple_unref(stmt->old_tuple);
 	if (stmt->new_tuple != NULL)
 		tuple_unref(stmt->new_tuple);
+	if (stmt->rollback_info.old_tuple != NULL)
+		tuple_unref(stmt->rollback_info.old_tuple);
+	if (stmt->rollback_info.new_tuple != NULL)
+		tuple_unref(stmt->rollback_info.new_tuple);
+}
+
+void
+txn_stmt_prepare_rollback_info(struct txn_stmt *stmt, struct tuple *old_tuple,
+			       struct tuple *new_tuple)
+{
+	stmt->rollback_info.old_tuple = old_tuple;
+	if (stmt->rollback_info.old_tuple != NULL)
+		tuple_ref(stmt->rollback_info.old_tuple);
+	stmt->rollback_info.new_tuple = new_tuple;
+	if (stmt->rollback_info.new_tuple != NULL)
+		tuple_ref(stmt->rollback_info.new_tuple);
 }
 
 /*
@@ -207,6 +258,7 @@ txn_new(void)
 	rlist_create(&txn->conflicted_by_list);
 	rlist_create(&txn->in_read_view_txs);
 	rlist_create(&txn->in_all_txs);
+	txn->space_on_replace_triggers_depth = 0;
 	return txn;
 }
 
@@ -216,6 +268,8 @@ txn_new(void)
 inline static void
 txn_free(struct txn *txn)
 {
+	if (txn->rollback_timer != NULL)
+		ev_timer_stop(loop(), txn->rollback_timer);
 	memtx_tx_clean_txn(txn);
 	struct tx_read_tracker *tracker, *tmp;
 	rlist_foreach_entry_safe(tracker, &txn->read_set,
@@ -306,8 +360,11 @@ txn_begin(void)
 	rlist_create(&txn->savepoints);
 	memtx_tx_register_tx(txn);
 	txn->fiber = NULL;
+	txn->timeout = TIMEOUT_INFINITY;
+	txn->rollback_timer = NULL;
 	fiber_set_txn(fiber(), txn);
-	/* fiber_on_yield is initialized by engine on demand */
+	trigger_create(&txn->fiber_on_yield, txn_on_yield, NULL, NULL);
+	trigger_add(&fiber()->on_yield, &txn->fiber_on_yield);
 	trigger_create(&txn->fiber_on_stop, txn_on_stop, NULL, NULL);
 	trigger_add(&fiber()->on_stop, &txn->fiber_on_stop);
 	/*
@@ -348,13 +405,8 @@ txn_begin_stmt(struct txn *txn, struct space *space, uint16_t type)
 		return -1;
 	}
 
-	/*
-	 * A conflict have happened; there is no reason to continue the TX.
-	 */
-	if (txn->status == TXN_CONFLICTED) {
-		diag_set(ClientError, ER_TRANSACTION_CONFLICT);
+	if (txn_check_can_continue(txn) != 0)
 		return -1;
-	}
 
 	struct txn_stmt *stmt = txn_stmt_new(&txn->region);
 	if (stmt == NULL)
@@ -452,7 +504,10 @@ txn_commit_stmt(struct txn *txn, struct request *request)
 			 */
 			stmt->does_require_old_tuple = true;
 
-			if(trigger_run(&stmt->space->on_replace, txn) != 0)
+			txn->space_on_replace_triggers_depth++;
+			int rc = trigger_run(&stmt->space->on_replace, txn);
+			txn->space_on_replace_triggers_depth--;
+			if (rc != 0)
 				goto fail;
 		}
 	}
@@ -702,11 +757,12 @@ txn_prepare(struct txn *txn)
 {
 	txn->psn = ++txn_last_psn;
 
-	if (txn_has_flag(txn, TXN_IS_ABORTED_BY_YIELD)) {
-		assert(!txn_has_flag(txn, TXN_CAN_YIELD));
-		diag_set(ClientError, ER_TRANSACTION_YIELD);
-		diag_log();
+	if (txn_check_can_continue(txn) != 0)
 		return -1;
+
+	if (txn->rollback_timer != NULL) {
+		ev_timer_stop(loop(), txn->rollback_timer);
+		txn->rollback_timer = NULL;
 	}
 	/*
 	 * If transaction has been started in SQL, deferred
@@ -722,8 +778,7 @@ txn_prepare(struct txn *txn)
 	 * Somebody else has written some value that we have read.
 	 * The RW transaction is not possible.
 	 */
-	if (txn->status == TXN_CONFLICTED ||
-	    (txn->status == TXN_IN_READ_VIEW && !stailq_empty(&txn->stmts))) {
+	if (txn->status == TXN_IN_READ_VIEW && !stailq_empty(&txn->stmts)) {
 		diag_set(ClientError, ER_TRANSACTION_CONFLICT);
 		return -1;
 	}
@@ -757,8 +812,7 @@ txn_prepare(struct txn *txn)
 	assert(rlist_empty(&txn->conflicted_by_list));
 
 	trigger_clear(&txn->fiber_on_stop);
-	if (!txn_has_flag(txn, TXN_CAN_YIELD))
-		trigger_clear(&txn->fiber_on_yield);
+	trigger_clear(&txn->fiber_on_yield);
 
 	txn->start_tm = ev_monotonic_now(loop());
 	txn->status = TXN_PREPARED;
@@ -986,8 +1040,7 @@ txn_rollback(struct txn *txn)
 	assert(txn->signature != TXN_SIGNATURE_UNKNOWN);
 	txn->status = TXN_ABORTED;
 	trigger_clear(&txn->fiber_on_stop);
-	if (!txn_has_flag(txn, TXN_CAN_YIELD))
-		trigger_clear(&txn->fiber_on_yield);
+	trigger_clear(&txn->fiber_on_yield);
 	txn_complete_fail(txn);
 	fiber_set_txn(fiber(), NULL);
 }
@@ -1016,13 +1069,10 @@ txn_can_yield(struct txn *txn, bool set)
 {
 	assert(txn == in_txn());
 	bool could = txn_has_flag(txn, TXN_CAN_YIELD);
-	if (set && !could) {
+	if (set) {
 		txn_set_flags(txn, TXN_CAN_YIELD);
-		trigger_clear(&txn->fiber_on_yield);
-	} else if (!set && could) {
+	} else {
 		txn_clear_flags(txn, TXN_CAN_YIELD);
-		trigger_create(&txn->fiber_on_yield, txn_on_yield, NULL, NULL);
-		trigger_add(&fiber()->on_yield, &txn->fiber_on_yield);
 	}
 	return could;
 }
@@ -1052,6 +1102,7 @@ box_txn_begin(void)
 	}
 	if (txn_begin() == NULL)
 		return -1;
+	txn_set_timeout(in_txn(), txn_timeout_default);
 	return 0;
 }
 
@@ -1109,6 +1160,27 @@ box_txn_alloc(size_t size)
 	};
 	return region_aligned_alloc(&txn->region, size,
 	                            alignof(union natural_align));
+}
+
+int
+box_txn_set_timeout(double timeout)
+{
+	if (timeout <= 0) {
+		diag_set(ClientError, ER_ILLEGAL_PARAMS,
+			 "timeout must be a number greater than 0");
+		return -1;
+	}
+	struct txn *txn = in_txn();
+	if (txn == NULL) {
+		diag_set(ClientError, ER_NO_TRANSACTION);
+		return -1;
+	}
+	if (txn->rollback_timer != NULL) {
+		diag_set(ClientError, ER_ACTIVE_TIMER);
+		return -1;
+	}
+	txn_set_timeout(txn, timeout);
+	return 0;
 }
 
 struct txn_savepoint *
@@ -1231,6 +1303,16 @@ txn_on_stop(struct trigger *trigger, void *event)
 	return 0;
 }
 
+static void
+txn_on_timeout(ev_loop *loop, ev_timer *watcher, int revents)
+{
+	(void) loop;
+	(void) revents;
+	struct txn *txn = (struct txn *)watcher->data;
+	txn_rollback_to_svp(txn, NULL);
+	txn_set_flags(txn, TXN_IS_ABORTED_BY_TIMEOUT);
+}
+
 /**
  * Memtx yield-in-transaction trigger callback.
  *
@@ -1255,9 +1337,25 @@ txn_on_yield(struct trigger *trigger, void *event)
 	(void) event;
 	struct txn *txn = in_txn();
 	assert(txn != NULL);
-	assert(!txn_has_flag(txn, TXN_CAN_YIELD));
-	txn_rollback_to_svp(txn, NULL);
-	txn_set_flags(txn, TXN_IS_ABORTED_BY_YIELD);
+	enum txn_flag flags = TXN_CAN_YIELD | TXN_IS_ABORTED_BY_YIELD;
+	if (!txn_has_any_of_flags(txn, flags)) {
+		txn_rollback_to_svp(txn, NULL);
+		txn_set_flags(txn, TXN_IS_ABORTED_BY_YIELD);
+		say_warn("Transaction has been aborted by a fiber yield");
+		return 0;
+	}
+	if (txn->rollback_timer == NULL && txn->timeout != TIMEOUT_INFINITY) {
+		int size;
+		txn->rollback_timer = region_alloc_object(&txn->region,
+							  struct ev_timer,
+							  &size);
+		if (txn->rollback_timer == NULL)
+			panic("Out of memory on creation of rollback timer");
+		ev_timer_init(txn->rollback_timer, txn_on_timeout,
+			      txn->timeout, 0);
+		txn->rollback_timer->data = txn;
+		ev_timer_start(loop(), txn->rollback_timer);
+	}
 	return 0;
 }
 
@@ -1267,10 +1365,8 @@ txn_detach(void)
 	struct txn *txn = in_txn();
 	if (txn == NULL)
 		return NULL;
-	if (!txn_has_flag(txn, TXN_CAN_YIELD)) {
-		txn_on_yield(NULL, NULL);
-		trigger_clear(&txn->fiber_on_yield);
-	}
+	txn_on_yield(NULL, NULL);
+	trigger_clear(&txn->fiber_on_yield);
 	trigger_clear(&txn->fiber_on_stop);
 	fiber_set_txn(fiber(), NULL);
 	return txn;
@@ -1282,4 +1378,6 @@ txn_attach(struct txn *txn)
 	assert(txn != NULL);
 	assert(!in_txn());
 	fiber_set_txn(fiber(), txn);
+	trigger_add(&fiber()->on_yield, &txn->fiber_on_yield);
+	trigger_add(&fiber()->on_stop, &txn->fiber_on_stop);
 }

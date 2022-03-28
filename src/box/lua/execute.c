@@ -8,6 +8,8 @@
 #include "box/bind.h"
 #include "box/sql_stmt_cache.h"
 #include "box/schema.h"
+#include "mpstream/mpstream.h"
+#include "box/sql/vdbeInt.h"
 
 /**
  * Serialize a description of the prepared statement.
@@ -329,8 +331,10 @@ lua_sql_bind_decode(struct lua_State *L, struct sql_bind *bind, int idx, int i)
 		bind->name = NULL;
 		bind->name_len = 0;
 	}
-	if (luaL_tofield(L, luaL_msgpack_default, NULL, -1, &field) < 0)
+	if (luaL_tofield(L, luaL_msgpack_default, -1, &field) < 0)
 		return -1;
+	bind->type = field.type;
+	bind->ext_type = field.ext_type;
 	switch (field.type) {
 	case MP_UINT:
 		bind->u64 = field.ival;
@@ -379,22 +383,41 @@ lua_sql_bind_decode(struct lua_State *L, struct sql_bind *bind, int idx, int i)
 			bind->dec = *field.decval;
 			break;
 		}
+		if (field.ext_type == MP_DATETIME) {
+			bind->dt = *field.dateval;
+			break;
+		}
 		diag_set(ClientError, ER_SQL_BIND_TYPE, "USERDATA",
 			 sql_bind_name(bind));
 		return -1;
-	case MP_ARRAY:
-		diag_set(ClientError, ER_SQL_BIND_TYPE, "ARRAY",
-			 sql_bind_name(bind));
-		return -1;
 	case MP_MAP:
-		diag_set(ClientError, ER_SQL_BIND_TYPE, "MAP",
-			 sql_bind_name(bind));
+	case MP_ARRAY: {
+		size_t used = region_used(region);
+		struct mpstream stream;
+		bool is_error = false;
+		mpstream_init(&stream, region, region_reserve_cb,
+			      region_alloc_cb, set_encode_error, &is_error);
+		lua_pushvalue(L, -1);
+		luamp_encode_r(L, luaL_msgpack_default, &stream, &field, 0);
+		lua_pop(L, 1);
+		mpstream_flush(&stream);
+		if (is_error) {
+			region_truncate(region, used);
+			diag_set(OutOfMemory, stream.pos - stream.buf,
+				 "mpstream_flush", "stream");
+			return -1;
+		}
+		bind->bytes = region_used(region) - used;
+		bind->s = region_join(region, bind->bytes);
+		if (bind->s != NULL)
+			break;
+		region_truncate(region, used);
+		diag_set(OutOfMemory, bind->bytes, "region_join", "bind->s");
 		return -1;
+	}
 	default:
 		unreachable();
 	}
-	bind->type = field.type;
-	bind->ext_type = field.ext_type;
 	lua_pop(L, lua_gettop(L) - idx);
 	return 0;
 }

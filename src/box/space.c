@@ -48,6 +48,10 @@
 #include "ck_constraint.h"
 #include "assoc.h"
 #include "constraint_id.h"
+#include "box.h"
+#include "tuple_constraint.h"
+#include "tuple_constraint_func.h"
+#include "tuple_constraint_fkey.h"
 
 int
 access_check_space(struct space *space, user_access_t access)
@@ -114,6 +118,83 @@ space_fill_index_map(struct space *space)
 	}
 }
 
+bool
+space_is_system(struct space *space)
+{
+	return space->def->id > BOX_SYSTEM_ID_MIN &&
+	       space->def->id < BOX_SYSTEM_ID_MAX;
+}
+
+/**
+ * Initialize constraints that are defined in @a space format.
+ * Can return nonzero in case of error (diag is set).
+ */
+static int
+space_init_constraints(struct space *space)
+{
+	assert(space->def != NULL);
+	struct tuple_format *format = space->format;
+	bool has_foreign_keys = false;
+	for (size_t j = 0; j < format->constraint_count; j++) {
+		struct tuple_constraint *constr = &format->constraint[j];
+		has_foreign_keys = has_foreign_keys ||
+				   constr->def.type == CONSTR_FKEY;
+		if (constr->check != tuple_constraint_noop_check)
+			continue;
+		if (constr->def.type == CONSTR_FUNC) {
+			if (tuple_constraint_func_init(constr, space) != 0)
+				return -1;
+		} else {
+			assert(constr->def.type == CONSTR_FKEY);
+			if (tuple_constraint_fkey_init(constr, space, -1) != 0)
+				return -1;
+		}
+	}
+	for (uint32_t i = 0; i < tuple_format_field_count(format); i++) {
+		struct tuple_field *field = tuple_format_field(format, i);
+		for (size_t j = 0; j < field->constraint_count; j++) {
+			struct tuple_constraint *constr = &field->constraint[j];
+			has_foreign_keys = has_foreign_keys ||
+					   constr->def.type == CONSTR_FKEY;
+			if (constr->check != tuple_constraint_noop_check)
+				continue;
+			if (constr->def.type == CONSTR_FUNC) {
+				if (tuple_constraint_func_init(constr,
+							       space) != 0)
+					return -1;
+			} else {
+				assert(constr->def.type == CONSTR_FKEY);
+				if (tuple_constraint_fkey_init(constr,
+							       space, i) != 0)
+					return -1;
+			}
+		}
+	}
+	space->has_foreign_keys = has_foreign_keys;
+	return 0;
+}
+
+/**
+ * Destroy constraints that are defined in @a space format.
+ */
+static int
+space_cleanup_constraints(struct space *space)
+{
+	struct tuple_format *format = space->format;
+	for (size_t j = 0; j < format->constraint_count; j++) {
+		struct tuple_constraint *constr = &format->constraint[j];
+		constr->destroy(constr);
+	}
+	for (size_t i = 0; i < tuple_format_field_count(format); i++) {
+		struct tuple_field *field = tuple_format_field(format, i);
+		for (size_t j = 0; j < field->constraint_count; j++) {
+			struct tuple_constraint *constr = &field->constraint[j];
+			constr->destroy(constr);
+		}
+	}
+	return 0;
+}
+
 int
 space_create(struct space *space, struct engine *engine,
 	     const struct space_vtab *vtab, struct space_def *def,
@@ -161,7 +242,7 @@ space_create(struct space *space, struct engine *engine,
 		goto fail;
 	}
 	space->index = space->index_map + index_id_max + 1;
-	size_t size = bitmap_size(index_id_max + 1);
+	size_t size = BITMAP_SIZE(index_id_max + 1);
 	space->check_unique_constraint_map = calloc(size, 1);
 	if (space->check_unique_constraint_map == NULL) {
 		diag_set(OutOfMemory, size, "malloc",
@@ -178,6 +259,10 @@ space_create(struct space *space, struct engine *engine,
 				index_def->iid);
 	}
 	space_fill_index_map(space);
+
+	if (space_init_constraints(space) != 0)
+		goto fail_free_indexes;
+
 	rlist_create(&space->parent_fk_constraint);
 	rlist_create(&space->child_fk_constraint);
 	rlist_create(&space->ck_constraint);
@@ -207,11 +292,7 @@ space_create(struct space *space, struct engine *engine,
 		}
 	}
 	space->constraint_ids = mh_strnptr_new();
-	if (space->constraint_ids == NULL) {
-		diag_set(OutOfMemory, sizeof(*space->constraint_ids), "malloc",
-			 "constraint_ids");
-		goto fail;
-	}
+	rlist_create(&space->space_cache_pin_list);
 	rlist_create(&space->memtx_stories);
 	return 0;
 
@@ -226,9 +307,18 @@ fail:
 	free(space->check_unique_constraint_map);
 	if (space->def != NULL)
 		space_def_delete(space->def);
-	if (space->format != NULL)
+	if (space->format != NULL) {
+		space_cleanup_constraints(space);
 		tuple_format_unref(space->format);
+	}
 	return -1;
+}
+
+int
+space_on_initial_recovery_complete(struct space *space, void *nothing)
+{
+	(void)nothing;
+	return space_init_constraints(space);
 }
 
 struct space *
@@ -264,8 +354,10 @@ space_delete(struct space *space)
 	}
 	free(space->index_map);
 	free(space->check_unique_constraint_map);
-	if (space->format != NULL)
+	if (space->format != NULL) {
+		space_cleanup_constraints(space);
 		tuple_format_unref(space->format);
+	}
 	trigger_destroy(&space->before_replace);
 	trigger_destroy(&space->on_replace);
 	space_def_delete(space->def);
@@ -280,6 +372,7 @@ space_delete(struct space *space)
 	assert(rlist_empty(&space->parent_fk_constraint));
 	assert(rlist_empty(&space->child_fk_constraint));
 	assert(rlist_empty(&space->ck_constraint));
+	assert(rlist_empty(&space->space_cache_pin_list));
 	space->vtab->destroy(space);
 }
 
@@ -337,8 +430,8 @@ index_name_by_id(struct space *space, uint32_t id)
 }
 
 /**
- * Run BEFORE triggers registered for a space. If a trigger
- * changes the current statement, this function updates the
+ * Run BEFORE triggers and foreign key constraint checks registered for a space.
+ * If a trigger changes the current statement, this function updates the
  * request accordingly.
  */
 static int
@@ -368,6 +461,14 @@ space_before_replace(struct space *space, struct txn *txn,
 	case IPROTO_INSERT:
 	case IPROTO_REPLACE:
 	case IPROTO_UPSERT:
+		/*
+		 * Since upgrade from pre-1.7.5 versions passes tuple with
+		 * not suitable format to before_replace triggers during recovery,
+		 * we need to disable format validation until box is configured.
+		 */
+		if (box_is_configured() && tuple_validate_raw(space->format,
+							      request->tuple) != 0)
+			return -1;
 		if (pk == NULL)
 			goto after_old_tuple_lookup;
 		index = pk;
@@ -466,6 +567,27 @@ after_old_tuple_lookup:;
 
 	assert(old_tuple != NULL || new_tuple != NULL);
 
+	if (old_tuple != NULL) {
+		/*
+		 * Before deleting we must check that there are no tuples
+		 * in other spaces that refer to this tuple via foreign key
+		 * constraint.
+		 */
+		struct space_cache_holder *h;
+		rlist_foreach_entry(h, &space->space_cache_pin_list, link) {
+			if (h->type != SPACE_HOLDER_FOREIGN_KEY)
+				continue;
+			struct tuple_constraint *constr =
+				container_of(h, struct tuple_constraint,
+					     space_cache_holder);
+			assert(constr->def.type == CONSTR_FKEY);
+			if (tuple_constraint_fkey_check_delete(constr,
+							       old_tuple,
+							       new_tuple) != 0)
+				return -1;
+		}
+	}
+
 	/*
 	 * Execute all registered BEFORE triggers.
 	 *
@@ -542,8 +664,19 @@ space_execute_dml(struct space *space, struct txn *txn,
 			return -1;
 	}
 
-	if (unlikely(!rlist_empty(&space->before_replace) &&
-		     space->run_triggers)) {
+	/* Any operation except insert can remove old tuple. */
+	bool need_foreign_key_check = false;
+	if (request->type != IPROTO_INSERT) {
+		struct space_cache_holder *h;
+		rlist_foreach_entry(h, &space->space_cache_pin_list, link) {
+			if (h->type == SPACE_HOLDER_FOREIGN_KEY) {
+				need_foreign_key_check = true;
+				break;
+			}
+		}
+	}
+	if (unlikely((!rlist_empty(&space->before_replace) &&
+		      space->run_triggers) || need_foreign_key_check)) {
 		/*
 		 * Call BEFORE triggers if any before dispatching
 		 * the request. Note, it may change the request
@@ -628,13 +761,13 @@ space_find_constraint_id(struct space *space, const char *name)
 {
 	struct mh_strnptr_t *ids = space->constraint_ids;
 	uint32_t len = strlen(name);
-	mh_int_t pos = mh_strnptr_find_inp(ids, name, len);
+	mh_int_t pos = mh_strnptr_find_str(ids, name, len);
 	if (pos == mh_end(ids))
 		return NULL;
 	return (struct constraint_id *) mh_strnptr_node(ids, pos)->val;
 }
 
-int
+void
 space_add_constraint_id(struct space *space, struct constraint_id *id)
 {
 	assert(space_find_constraint_id(space, id->name) == NULL);
@@ -642,11 +775,7 @@ space_add_constraint_id(struct space *space, struct constraint_id *id)
 	uint32_t len = strlen(id->name);
 	uint32_t hash = mh_strn_hash(id->name, len);
 	const struct mh_strnptr_node_t name_node = {id->name, len, hash, id};
-	if (mh_strnptr_put(ids, &name_node, NULL, NULL) == mh_end(ids)) {
-		diag_set(OutOfMemory, sizeof(name_node), "malloc", "node");
-		return -1;
-	}
-	return 0;
+	mh_strnptr_put(ids, &name_node, NULL, NULL);
 }
 
 struct constraint_id *
@@ -654,7 +783,7 @@ space_pop_constraint_id(struct space *space, const char *name)
 {
 	struct mh_strnptr_t *ids = space->constraint_ids;
 	uint32_t len = strlen(name);
-	mh_int_t pos = mh_strnptr_find_inp(ids, name, len);
+	mh_int_t pos = mh_strnptr_find_str(ids, name, len);
 	assert(pos != mh_end(ids));
 	struct constraint_id *id = (struct constraint_id *)
 		mh_strnptr_node(ids, pos)->val;

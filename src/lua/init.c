@@ -62,6 +62,7 @@
 #include "lua/utf8.h"
 #include "lua/swim.h"
 #include "lua/decimal.h"
+#include "lua/uri.h"
 #include "digest.h"
 #include "errinj.h"
 #include <small/ibuf.h>
@@ -69,6 +70,16 @@
 #include <ctype.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+
+#if defined(EMBED_LUAZLIB)
+LUALIB_API int
+luaopen_zlib(lua_State *L);
+#endif
+
+#if defined(EMBED_LUAZIP)
+LUALIB_API int
+luaopen_zip(lua_State *L);
+#endif
 
 /**
  * The single Lua state of the transaction processor (tx) thread.
@@ -104,15 +115,15 @@ extern char strict_lua[],
 	argparse_lua[],
 	iconv_lua[],
 	/* jit.* library */
-	vmdef_lua[],
-	bc_lua[],
-	bcsave_lua[],
-	dis_arm64_lua[],
-	dis_x86_lua[],
-	dis_x64_lua[],
-	dump_lua[],
+	jit_vmdef_lua[],
+	jit_bc_lua[],
+	jit_bcsave_lua[],
+	jit_dis_arm64_lua[],
+	jit_dis_x86_lua[],
+	jit_dis_x64_lua[],
+	jit_dump_lua[],
 	csv_lua[],
-	v_lua[],
+	jit_v_lua[],
 	clock_lua[],
 	title_lua[],
 	env_lua[],
@@ -121,15 +132,109 @@ extern char strict_lua[],
 	trigger_lua[],
 	string_lua[],
 	swim_lua[],
-	p_lua[], /* LuaJIT 2.1 profiler */
-	zone_lua[], /* LuaJIT 2.1 profiler */
+	jit_p_lua[], /* LuaJIT 2.1 profiler */
+	jit_zone_lua[], /* LuaJIT 2.1 profiler */
 	/* tools.* libraries. */
-	bufread_lua[],
-	symtab_lua[],
-	parse_lua[],
-	process_lua[],
-	humanize_lua[],
-	memprof_lua[]
+	utils_bufread_lua[],
+	utils_symtab_lua[],
+	memprof_parse_lua[],
+	memprof_process_lua[],
+	memprof_humanize_lua[],
+	memprof_lua[],
+	datetime_lua[]
+#if defined(EMBED_LUAROCKS)
+	, luarocks_core_hardcoded_lua[],
+	luarocks_admin_cache_lua[],
+	luarocks_admin_cmd_add_lua[],
+	luarocks_admin_cmd_make_manifest_lua[],
+	luarocks_admin_cmd_refresh_cache_lua[],
+	luarocks_admin_cmd_remove_lua[],
+	luarocks_admin_index_lua[],
+	luarocks_build_builtin_lua[],
+	luarocks_build_cmake_lua[],
+	luarocks_build_command_lua[],
+	luarocks_build_lua[],
+	luarocks_build_make_lua[],
+	luarocks_cmd_build_lua[],
+	luarocks_cmd_config_lua[],
+	luarocks_cmd_doc_lua[],
+	luarocks_cmd_download_lua[],
+	luarocks_cmd_help_lua[],
+	luarocks_cmd_init_lua[],
+	luarocks_cmd_install_lua[],
+	luarocks_cmd_lint_lua[],
+	luarocks_cmd_list_lua[],
+	luarocks_cmd_lua[],
+	luarocks_cmd_make_lua[],
+	luarocks_cmd_new_version_lua[],
+	luarocks_cmd_pack_lua[],
+	luarocks_cmd_path_lua[],
+	luarocks_cmd_purge_lua[],
+	luarocks_cmd_remove_lua[],
+	luarocks_cmd_search_lua[],
+	luarocks_cmd_show_lua[],
+	luarocks_cmd_test_lua[],
+	luarocks_cmd_unpack_lua[],
+	luarocks_cmd_upload_lua[],
+	luarocks_cmd_which_lua[],
+	luarocks_cmd_write_rockspec_lua[],
+	luarocks_core_cfg_lua[],
+	luarocks_core_dir_lua[],
+	luarocks_core_manif_lua[],
+	luarocks_core_path_lua[],
+	luarocks_core_persist_lua[],
+	luarocks_core_sysdetect_lua[],
+	luarocks_core_vers_lua[],
+	luarocks_deps_lua[],
+	luarocks_dir_lua[],
+	luarocks_download_lua[],
+	luarocks_fetch_cvs_lua[],
+	luarocks_fetch_git_file_lua[],
+	luarocks_fetch_git_http_lua[],
+	luarocks_fetch_git_https_lua[],
+	luarocks_fetch_git_lua[],
+	luarocks_fetch_git_ssh_lua[],
+	luarocks_fetch_hg_http_lua[],
+	luarocks_fetch_hg_https_lua[],
+	luarocks_fetch_hg_lua[],
+	luarocks_fetch_hg_ssh_lua[],
+	luarocks_signing_lua[],
+	luarocks_fetch_lua[],
+	luarocks_fetch_sscm_lua[],
+	luarocks_fetch_svn_lua[],
+	luarocks_fs_lua[],
+	luarocks_fs_lua_lua[],
+	luarocks_fs_tools_lua[],
+	luarocks_fs_unix_lua[],
+	luarocks_fs_unix_tools_lua[],
+	luarocks_fun_lua[],
+	luarocks_loader_lua[],
+	luarocks_manif_lua[],
+	luarocks_manif_writer_lua[],
+	luarocks_pack_lua[],
+	luarocks_path_lua[],
+	luarocks_persist_lua[],
+	luarocks_queries_lua[],
+	luarocks_remove_lua[],
+	luarocks_repos_lua[],
+	luarocks_require_lua[],
+	luarocks_results_lua[],
+	luarocks_rockspecs_lua[],
+	luarocks_search_lua[],
+	luarocks_test_busted_lua[],
+	luarocks_test_command_lua[],
+	luarocks_test_lua[],
+	luarocks_tools_patch_lua[],
+	luarocks_tools_tar_lua[],
+	luarocks_tools_zip_lua[],
+	luarocks_type_check_lua[],
+	luarocks_type_manifest_lua[],
+	luarocks_type_rockspec_lua[],
+	luarocks_upload_api_lua[],
+	luarocks_upload_multipart_lua[],
+	luarocks_util_lua[],
+	luarocks_core_util_lua[]
+#endif /* defined(EMBED_LUAROCKS) */
 ;
 
 static const char *lua_modules[] = {
@@ -166,24 +271,130 @@ static const char *lua_modules[] = {
 	"iconv", iconv_lua,
 	"swim", swim_lua,
 	/* jit.* library */
-	"jit.vmdef", vmdef_lua,
-	"jit.bc", bc_lua,
-	"jit.bcsave", bcsave_lua,
-	"jit.dis_arm64", dis_arm64_lua,
-	"jit.dis_x86", dis_x86_lua,
-	"jit.dis_x64", dis_x64_lua,
-	"jit.dump", dump_lua,
-	"jit.v", v_lua,
+	"jit.vmdef", jit_vmdef_lua,
+	"jit.bc", jit_bc_lua,
+	"jit.bcsave", jit_bcsave_lua,
+	"jit.dis_arm64", jit_dis_arm64_lua,
+	"jit.dis_x86", jit_dis_x86_lua,
+	"jit.dis_x64", jit_dis_x64_lua,
+	"jit.dump", jit_dump_lua,
+	"jit.v", jit_v_lua,
 	/* Profiler */
-	"jit.p", p_lua,
-	"jit.zone", zone_lua,
+	"jit.p", jit_p_lua,
+	"jit.zone", jit_zone_lua,
 	/* tools.* libraries. Order is important. */
-	"utils.bufread", bufread_lua,
-	"utils.symtab", symtab_lua,
-	"memprof.parse", parse_lua,
-	"memprof.process", process_lua,
-	"memprof.humanize", humanize_lua,
+	"utils.bufread", utils_bufread_lua,
+	"utils.symtab", utils_symtab_lua,
+	"memprof.parse", memprof_parse_lua,
+	"memprof.process", memprof_process_lua,
+	"memprof.humanize", memprof_humanize_lua,
 	"memprof", memprof_lua,
+	"datetime", datetime_lua,
+	NULL
+};
+
+/**
+ * If there's a risk that a module may fail to load, put it here.
+ * Then it'll be embedded, but not loaded until the first use.
+ */
+static const char *lua_modules_preload[] = {
+#if defined(EMBED_LUAROCKS)
+	/*
+	 * LuaRocks creates a temporary file on startup, which may fail
+	 * if the tmp dir is read-only.
+	 */
+	"luarocks.core.hardcoded", luarocks_core_hardcoded_lua,
+	"luarocks.core.util", luarocks_core_util_lua,
+	"luarocks.core.persist", luarocks_core_persist_lua,
+	"luarocks.core.sysdetect", luarocks_core_sysdetect_lua,
+	"luarocks.core.cfg", luarocks_core_cfg_lua,
+	"luarocks.core.dir", luarocks_core_dir_lua,
+	"luarocks.core.path", luarocks_core_path_lua,
+	"luarocks.core.manif", luarocks_core_manif_lua,
+	"luarocks.core.vers", luarocks_core_vers_lua,
+	"luarocks.util", luarocks_util_lua,
+	"luarocks.loader", luarocks_loader_lua,
+	"luarocks.dir", luarocks_dir_lua,
+	"luarocks.path", luarocks_path_lua,
+	"luarocks.fs", luarocks_fs_lua,
+	"luarocks.persist", luarocks_persist_lua,
+	"luarocks.fun", luarocks_fun_lua,
+	"luarocks.tools.patch", luarocks_tools_patch_lua,
+	"luarocks.tools.zip", luarocks_tools_zip_lua,
+	"luarocks.tools.tar", luarocks_tools_tar_lua,
+	"luarocks.fs.unix", luarocks_fs_unix_lua,
+	"luarocks.fs.unix.tools", luarocks_fs_unix_tools_lua,
+	"luarocks.fs.lua", luarocks_fs_lua_lua,
+	"luarocks.fs.tools", luarocks_fs_tools_lua,
+	"luarocks.queries", luarocks_queries_lua,
+	"luarocks.type_check", luarocks_type_check_lua,
+	"luarocks.type.rockspec", luarocks_type_rockspec_lua,
+	"luarocks.rockspecs", luarocks_rockspecs_lua,
+	"luarocks.signing", luarocks_signing_lua,
+	"luarocks.fetch", luarocks_fetch_lua,
+	"luarocks.type.manifest", luarocks_type_manifest_lua,
+	"luarocks.manif", luarocks_manif_lua,
+	"luarocks.build.builtin", luarocks_build_builtin_lua,
+	"luarocks.deps", luarocks_deps_lua,
+	"luarocks.cmd", luarocks_cmd_lua,
+	"luarocks.test.busted", luarocks_test_busted_lua,
+	"luarocks.test.command", luarocks_test_command_lua,
+	"luarocks.results", luarocks_results_lua,
+	"luarocks.search", luarocks_search_lua,
+	"luarocks.repos", luarocks_repos_lua,
+	"luarocks.cmd.show", luarocks_cmd_show_lua,
+	"luarocks.cmd.path", luarocks_cmd_path_lua,
+	"luarocks.cmd.write_rockspec", luarocks_cmd_write_rockspec_lua,
+	"luarocks.manif.writer", luarocks_manif_writer_lua,
+	"luarocks.remove", luarocks_remove_lua,
+	"luarocks.pack", luarocks_pack_lua,
+	"luarocks.build", luarocks_build_lua,
+	"luarocks.cmd.make", luarocks_cmd_make_lua,
+	"luarocks.cmd.build", luarocks_cmd_build_lua,
+	"luarocks.cmd.install", luarocks_cmd_install_lua,
+	"luarocks.cmd.list", luarocks_cmd_list_lua,
+	"luarocks.download", luarocks_download_lua,
+	"luarocks.cmd.download", luarocks_cmd_download_lua,
+	"luarocks.cmd.search", luarocks_cmd_search_lua,
+	"luarocks.cmd.pack", luarocks_cmd_pack_lua,
+	"luarocks.cmd.new_version", luarocks_cmd_new_version_lua,
+	"luarocks.cmd.purge", luarocks_cmd_purge_lua,
+	"luarocks.cmd.init", luarocks_cmd_init_lua,
+	"luarocks.cmd.lint", luarocks_cmd_lint_lua,
+	"luarocks.test", luarocks_test_lua,
+	"luarocks.cmd.test", luarocks_cmd_test_lua,
+	"luarocks.cmd.which", luarocks_cmd_which_lua,
+	"luarocks.cmd.remove", luarocks_cmd_remove_lua,
+	"luarocks.upload.multipart", luarocks_upload_multipart_lua,
+	"luarocks.upload.api", luarocks_upload_api_lua,
+	"luarocks.cmd.upload", luarocks_cmd_upload_lua,
+	"luarocks.cmd.help", luarocks_cmd_help_lua,
+	"luarocks.cmd.doc", luarocks_cmd_doc_lua,
+	"luarocks.cmd.unpack", luarocks_cmd_unpack_lua,
+	"luarocks.cmd.config", luarocks_cmd_config_lua,
+	"luarocks.require", luarocks_require_lua,
+	"luarocks.build.cmake", luarocks_build_cmake_lua,
+	"luarocks.build.make", luarocks_build_make_lua,
+	"luarocks.build.command", luarocks_build_command_lua,
+	"luarocks.fetch.cvs", luarocks_fetch_cvs_lua,
+	"luarocks.fetch.svn", luarocks_fetch_svn_lua,
+	"luarocks.fetch.sscm", luarocks_fetch_sscm_lua,
+	"luarocks.fetch.git", luarocks_fetch_git_lua,
+	"luarocks.fetch.git_file", luarocks_fetch_git_file_lua,
+	"luarocks.fetch.git_http", luarocks_fetch_git_http_lua,
+	"luarocks.fetch.git_https", luarocks_fetch_git_https_lua,
+	"luarocks.fetch.git_ssh", luarocks_fetch_git_ssh_lua,
+	"luarocks.fetch.hg", luarocks_fetch_hg_lua,
+	"luarocks.fetch.hg_http", luarocks_fetch_hg_http_lua,
+	"luarocks.fetch.hg_https", luarocks_fetch_hg_https_lua,
+	"luarocks.fetch.hg_ssh", luarocks_fetch_hg_ssh_lua,
+	"luarocks.admin.cache", luarocks_admin_cache_lua,
+	"luarocks.admin.cmd.refresh_cache", luarocks_admin_cmd_refresh_cache_lua,
+	"luarocks.admin.index", luarocks_admin_index_lua,
+	"luarocks.admin.cmd.add", luarocks_admin_cmd_add_lua,
+	"luarocks.admin.cmd.remove", luarocks_admin_cmd_remove_lua,
+	"luarocks.admin.cmd.make_manifest", luarocks_admin_cmd_make_manifest_lua,
+#endif /* defined(EMBED_LUAROCKS) */
 	NULL
 };
 
@@ -593,6 +804,15 @@ luaopen_tarantool(lua_State *L)
 	lua_pushstring(L, TARANTOOL_C_FLAGS);
 	lua_settable(L, -3);
 
+	/* build.linking */
+	lua_pushstring(L, "linking");
+#if defined(BUILD_STATIC)
+	lua_pushstring(L, "static");
+#else
+	lua_pushstring(L, "dynamic");
+#endif
+	lua_settable(L, -3);
+
 	lua_settable(L, -3);    /* box.info.build */
 	return 1;
 }
@@ -612,6 +832,7 @@ tarantool_lua_init(const char *tarantool_bin, int argc, char **argv)
 	lua_call(L, 0, 0);
 	lua_register(L, "tonumber64", lbox_tonumber64);
 
+	tarantool_lua_uri_init(L);
 	tarantool_lua_utf8_init(L);
 	tarantool_lua_utils_init(L);
 	tarantool_lua_fiber_init(L);
@@ -635,6 +856,14 @@ tarantool_lua_init(const char *tarantool_bin, int argc, char **argv)
 	lua_pop(L, 1);
 	luaopen_json(L);
 	lua_pop(L, 1);
+#if defined(EMBED_LUAZLIB)
+	luaopen_zlib(L);
+	lua_pop(L, 1);
+#endif
+#if defined(EMBED_LUAZIP)
+	luaopen_zip(L);
+	lua_pop(L, 1);
+#endif
 #if defined(HAVE_GNU_READLINE)
 	/*
 	 * Disable libreadline signals handlers. All signals are handled in
@@ -663,6 +892,20 @@ tarantool_lua_init(const char *tarantool_bin, int argc, char **argv)
 		lua_pop(L, 1); /* chunkname */
 	}
 	lua_pop(L, 1); /* _LOADED */
+
+	lua_getfield(L, LUA_REGISTRYINDEX, "_PRELOAD");
+	for (const char **s = lua_modules_preload; *s; s += 2) {
+		const char *modname = *s;
+		const char *modsrc = *(s + 1);
+		const char *modfile = lua_pushfstring(L,
+			"@builtin/%s.lua", modname);
+		if (luaL_loadbuffer(L, modsrc, strlen(modsrc), modfile))
+			panic("Error loading Lua module %s...: %s",
+			      modname, lua_tostring(L, -1));
+		lua_setfield(L, -3, modname); /* package.preload.modname = t */
+		lua_pop(L, 1); /* chunkname */
+	}
+	lua_pop(L, 1); /* _PRELOAD */
 
 	luaopen_tarantool(L);
 	lua_pop(L, 1);

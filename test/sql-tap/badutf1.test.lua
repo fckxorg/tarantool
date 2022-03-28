@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 local test = require("sqltester")
-test:plan(23)
+test:plan(20)
 
 --!./tcltestrunner.lua
 -- 2007 May 15
@@ -254,51 +254,11 @@ test:do_test(
 test:do_test(
     "badutf-3.5",
     function()
-        return test:execsql2("SELECT length('\x61\xc0\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80') AS x")
-    end, {
-        -- <badutf-3.5>
-        "X", 12
-        -- </badutf-3.5>
-    })
-
-test:do_test(
-    "badutf-3.6",
-    function()
-        return test:execsql2("SELECT length('\xc0\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80') AS x")
-    end, {
-        -- <badutf-3.6>
-        "X", 11
-        -- </badutf-3.6>
-    })
-
-test:do_test(
-    "badutf-3.7",
-    function()
         return test:execsql2("SELECT length('\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80') AS x")
     end, {
         -- <badutf-3.7>
         "X", 10
         -- </badutf-3.7>
-    })
-
-test:do_test(
-    "badutf-3.8",
-    function()
-        return test:execsql2("SELECT length('\x80\x80\x80\x80\x80\xf0\x80\x80\x80\x80') AS x")
-    end, {
-        -- <badutf-3.8>
-        "X", 7
-        -- </badutf-3.8>
-    })
-
-test:do_test(
-    "badutf-3.9",
-    function()
-        return test:execsql2("SELECT length('\x80\x80\x80\x80\x80\xf0\x80\x80\x80\xff') AS x")
-    end, {
-        -- <badutf-3.9>
-        "X", 7
-        -- </badutf-3.9>
     })
 
 test:do_test(
@@ -336,46 +296,61 @@ test:do_test(
 test:do_test(
     "badutf-4.4",
     function()
-        return test:execsql2([[SELECT hex(CAST(TRIM(x'ff80' FROM ]]..
-                             [[x'808080f0808080ff') AS VARBINARY)) AS x]])
+        return test:execsql2([[
+            SELECT hex(TRIM(x'ff80' FROM x'808080f0808080ff')) AS x;
+        ]])
     end, {
         -- <badutf-4.4>
-        "X", "808080F0808080FF"
+        "X", "F0"
         -- </badutf-4.4>
     })
 
 test:do_test(
     "badutf-4.5",
     function()
-        return test:execsql2([[SELECT hex(CAST(TRIM(x'ff80' FROM ]]..
-                             [[x'ff8080f0808080ff') AS VARBINARY)) AS x]])
+        return test:execsql2([[
+            SELECT hex(TRIM(x'ff80' FROM x'ff8080f0808080ff')) AS x;
+        ]])
     end, {
         -- <badutf-4.5>
-        "X", "80F0808080FF"
+        "X", "F0"
         -- </badutf-4.5>
     })
 
 test:do_test(
     "badutf-4.6",
     function()
-        return test:execsql2([[SELECT hex(CAST(TRIM(x'ff80' FROM ]]..
-                             [[x'ff80f0808080ff') AS VARBINARY)) AS x]])
+        return test:execsql2([[
+            SELECT hex(TRIM(x'ff80' FROM x'ff80f0808080ff')) AS x;
+        ]])
     end, {
         -- <badutf-4.6>
-        "X", "F0808080FF"
+        "X", "F0"
         -- </badutf-4.6>
     })
 
 test:do_test(
     "badutf-4.7",
     function()
-        return test:execsql2([[SELECT hex(CAST(TRIM(x'ff8080' FROM ]]..
-                             [[x'ff80f0808080ff') AS VARBINARY)) AS x]])
+        return test:execsql2([[
+            SELECT hex(TRIM(x'ff8080' FROM x'ff80f0808080ff')) AS x;
+        ]])
     end, {
         -- <badutf-4.7>
-        "X", "FF80F0808080FF"
+        "X", "F0"
         -- </badutf-4.7>
     })
+
+-- gh-4145: Make sure that TRIM() properly work with VARBINARY.
+test:do_execsql_test(
+    "badutf-5",
+    [[
+        SELECT HEX(TRIM(x'ff1234' from x'1234125678123412'));
+    ]],
+    {
+        '5678'
+    }
+)
 
 --db2("close")
 

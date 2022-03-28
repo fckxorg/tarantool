@@ -1,5 +1,5 @@
 	*** main_f ***
-1..14
+1..16
 	*** raft_test_leader_election ***
     1..24
     ok 1 - 1 pending message at start
@@ -29,7 +29,7 @@
 ok 1 - subtests
 	*** raft_test_leader_election: done ***
 	*** raft_test_recovery ***
-    1..12
+    1..13
     ok 1 - became candidate
     ok 2 - remote checkpoint of a candidate
     ok 3 - local checkpoint of a candidate
@@ -40,8 +40,9 @@ ok 1 - subtests
     ok 8 - remote checkpoint of a leader
     ok 9 - local checkpoint of a leader
     ok 10 - restart always as a follower
-    ok 11 - remote checkpoint of a leader
-    ok 12 - local checkpoint of a leader
+    ok 11 - vote count is restored correctly
+    ok 12 - remote checkpoint of a leader
+    ok 13 - local checkpoint of a leader
 ok 2 - subtests
 	*** raft_test_recovery: done ***
 	*** raft_test_bad_msg ***
@@ -113,7 +114,7 @@ ok 4 - subtests
 ok 5 - subtests
 	*** raft_test_vote_skip: done ***
 	*** raft_test_leader_resign ***
-    1..23
+    1..24
     ok 1 - message is accepted
     ok 2 - leader is elected
     ok 3 - message is accepted
@@ -123,20 +124,21 @@ ok 5 - subtests
     ok 7 - leader is elected
     ok 8 - message is accepted
     ok 9 - leader has resigned
-    ok 10 - still follower
-    ok 11 - vote from 2
-    ok 12 - vote from 3
-    ok 13 - became leader
-    ok 14 - the leader has resigned
-    ok 15 - resign notification is sent
-    ok 16 - new election is waiting for WAL write
-    ok 17 - message is accepted
-    ok 18 - the leader is accepted
-    ok 19 - message is accepted
-    ok 20 - the leader has resigned, new election is scheduled
-    ok 21 - vote from 2
-    ok 22 - vote from 3
-    ok 23 - the leader is elected
+    ok 10 - resign makes a broadcast
+    ok 11 - still follower
+    ok 12 - vote from 2
+    ok 13 - vote from 3
+    ok 14 - became leader
+    ok 15 - the leader has resigned
+    ok 16 - resign notification is sent
+    ok 17 - new election is waiting for WAL write
+    ok 18 - message is accepted
+    ok 19 - the leader is accepted
+    ok 20 - message is accepted
+    ok 21 - the leader has resigned, new election is scheduled
+    ok 22 - vote from 2
+    ok 23 - vote from 3
+    ok 24 - the leader is elected
 ok 6 - subtests
 	*** raft_test_leader_resign: done ***
 	*** raft_test_split_brain ***
@@ -220,7 +222,7 @@ ok 11 - subtests
 ok 12 - subtests
 	*** raft_test_enable_disable: done ***
 	*** raft_test_too_long_wal_write ***
-    1..8
+    1..22
     ok 1 - vote for 2
     ok 2 - vote is volatile
     ok 3 - message from leader
@@ -229,6 +231,20 @@ ok 12 - subtests
     ok 6 - wal write is finished
     ok 7 - timer works again
     ok 8 - became candidate
+    ok 9 - term is bumped
+    ok 10 - 2 votes for 3 in a new term
+    ok 11 - term is old
+    ok 12 - vote is used for self
+    ok 13 - volatile term is new
+    ok 14 - volatile vote is unused
+    ok 15 - new election timeout works
+    ok 16 - new term is started with vote for self
+    ok 17 - term is old
+    ok 18 - vote is unused
+    ok 19 - volatile term is new
+    ok 20 - volatile vote is self
+    ok 21 - new election timeout works
+    ok 22 - new term is started with vote for self
 ok 13 - subtests
 	*** raft_test_too_long_wal_write: done ***
 	*** raft_test_promote_restore ***
@@ -247,4 +263,82 @@ ok 13 - subtests
     ok 12 - not a candidate
 ok 14 - subtests
 	*** raft_test_promote_restore: done ***
+	*** raft_test_bump_term_before_cfg ***
+    1..6
+    ok 1 - new term is started with vote for self
+    ok 2 - recovered
+    ok 3 - instance id is unknown
+    ok 4 - bump term externally
+    ok 5 - term write is in progress
+    ok 6 - started new term
+ok 15 - subtests
+	*** raft_test_bump_term_before_cfg: done ***
+	*** raft_test_split_vote ***
+    1..64
+    ok 1 - elections with a new term
+    ok 2 - vote response for 1 from 2
+    ok 3 - vote response for 3 from 3
+    ok 4 - term timeout >= election timeout normally
+    ok 5 - vote response for 3 from 4
+    ok 6 - split vote reduced the term timeout
+    ok 7 - a new term
+    ok 8 - timeout is normal again
+    ok 9 - is candidate
+    ok 10 - voted for self
+    ok 11 - vote response for 2 from 2
+    ok 12 - the vote is not split yet
+    ok 13 - cluster size change makes split vote
+    ok 14 - a new term
+    ok 15 - vote response for 2 from 2
+    ok 16 - message is accepted
+    ok 17 - other node's leadership is accepted
+    ok 18 - the only own vote was from self
+    ok 19 - cluster change does not affect the leader's death waiting
+    ok 20 - vote response for 2 from 2
+    ok 21 - vote response for 3 from 3
+    ok 22 - voter couldn't schedule new term
+    ok 23 - bump term
+    ok 24 - vote for self
+    ok 25 - vote response for 2 from 2
+    ok 26 - split vote is already inevitable
+    ok 27 - vote response for 3 from 3
+    ok 28 - split vote got worse, but delay didn't change
+    ok 29 - old term
+    ok 30 - unused vote
+    ok 31 - new volatile term
+    ok 32 - new volatile vote
+    ok 33 - vote response for 2 from 2
+    ok 34 - new term
+    ok 35 - voted for self
+    ok 36 - volatile term
+    ok 37 - volatile vote
+    ok 38 - found split vote after WAL write
+    ok 39 - bump term
+    ok 40 - vote for self
+    ok 41 - bump term
+    ok 42 - vote for self
+    ok 43 - vote response for 2 from 2
+    ok 44 - split vote is not checked for cluster < quorum
+    ok 45 - bump term
+    ok 46 - vote for self
+    ok 47 - vote response for 2 from 2
+    ok 48 - vote response for 2 from 3
+    ok 49 - vote response for 3 from 4
+    ok 50 - vote response for 4 from 5
+    ok 51 - split vote is not checked when vote count > cluster size
+    ok 52 - bump term
+    ok 53 - vote for self
+    ok 54 - vote response for 2 from 2
+    ok 55 - not split vote yet
+    ok 56 - split vote after quorum increase
+    ok 57 - bump term
+    ok 58 - vote for self
+    ok 59 - bump term
+    ok 60 - vote for self
+    ok 61 - vote response for 2 from 2
+    ok 62 - planned new election after yield
+    ok 63 - vote response for 3 from 3
+    ok 64 - still waiting for yield
+ok 16 - subtests
+	*** raft_test_split_vote: done ***
 	*** main_f: done ***

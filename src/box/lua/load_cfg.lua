@@ -57,6 +57,7 @@ local default_cfg = {
     vinyl_read_threads  = 1,
     vinyl_write_threads = 4,
     vinyl_timeout       = 60,
+    vinyl_defer_deletes = false,
     vinyl_run_count_per_level = 2,
     vinyl_run_size_ratio      = 3.5,
     vinyl_range_size          = nil, -- set automatically
@@ -66,6 +67,9 @@ local default_cfg = {
     -- logging options are covered by
     -- a separate log module; they are
     -- 'log_' prefixed
+
+    audit_log           = nil,
+    audit_nonblock      = true,
 
     io_collect_interval = nil,
     readahead           = 16320,
@@ -97,18 +101,20 @@ local default_cfg = {
     replication_timeout = 1,
     replication_sync_lag = 10,
     replication_sync_timeout = 300,
-    replication_synchro_quorum = 1,
+    replication_synchro_quorum = "N / 2 + 1",
     replication_synchro_timeout = 5,
     replication_connect_timeout = 30,
     replication_connect_quorum = nil, -- connect all
     replication_skip_conflict = false,
     replication_anon      = false,
+    replication_threads   = 1,
     feedback_enabled      = true,
     feedback_crashinfo    = true,
     feedback_host         = "https://feedback.tarantool.io",
     feedback_interval     = 3600,
     net_msg_max           = 768,
     sql_cache_size        = 5 * 1024 * 1024,
+    txn_timeout           = 365 * 100 * 86400,
 }
 
 -- cfg variables which are covered by modules
@@ -143,7 +149,7 @@ local module_cfg_type = {
 -- forget to update it when add a new type or a combination of
 -- types here.
 local template_cfg = {
-    listen              = 'string, number',
+    listen              = 'string, number, table',
     memtx_memory        = 'number',
     strip_core          = 'boolean',
     memtx_min_tuple_size  = 'number',
@@ -162,6 +168,7 @@ local template_cfg = {
     vinyl_read_threads        = 'number',
     vinyl_write_threads       = 'number',
     vinyl_timeout             = 'number',
+    vinyl_defer_deletes       = 'boolean',
     vinyl_run_count_per_level = 'number',
     vinyl_run_size_ratio      = 'number',
     vinyl_range_size          = 'number',
@@ -172,6 +179,9 @@ local template_cfg = {
     log_nonblock        = 'module',
     log_level           = 'module',
     log_format          = 'module',
+
+    audit_log           = 'string',
+    audit_nonblock      = 'boolean',
 
     io_collect_interval = 'number',
     readahead           = 'number',
@@ -209,37 +219,26 @@ local template_cfg = {
     replication_connect_quorum = 'number',
     replication_skip_conflict = 'boolean',
     replication_anon      = 'boolean',
+    replication_threads   = 'number',
     feedback_enabled      = ifdef_feedback('boolean'),
     feedback_crashinfo    = ifdef_feedback('boolean'),
     feedback_host         = ifdef_feedback('string'),
     feedback_interval     = ifdef_feedback('number'),
     net_msg_max           = 'number',
     sql_cache_size        = 'number',
+    txn_timeout           = 'number',
 }
 
-local function normalize_uri(port)
-    if port == nil or type(port) == 'table' then
-        return port
-    end
-    return tostring(port);
-end
-
-local function normalize_uri_list(port_list)
-    local result = {}
+local function normalize_uri_list_for_replication(port_list)
     if type(port_list) == 'table' then
-        for _, port in ipairs(port_list) do
-            table.insert(result, normalize_uri(port))
-        end
-    else
-        table.insert(result, normalize_uri(port_list))
+        return port_list
     end
-    return result
+    return {port_list}
 end
 
 -- options that require special handling
 local modify_cfg = {
-    listen             = normalize_uri,
-    replication        = normalize_uri_list,
+    replication        = normalize_uri_list_for_replication,
 }
 
 local function purge_password_from_uri(uri)
@@ -304,6 +303,7 @@ local dynamic_cfg = {
     vinyl_max_tuple_size    = private.cfg_set_vinyl_max_tuple_size,
     vinyl_cache             = private.cfg_set_vinyl_cache,
     vinyl_timeout           = private.cfg_set_vinyl_timeout,
+    vinyl_defer_deletes     = function() end,
     checkpoint_count        = private.cfg_set_checkpoint_count,
     checkpoint_interval     = private.cfg_set_checkpoint_interval,
     checkpoint_wal_threshold = private.cfg_set_checkpoint_wal_threshold,
@@ -335,6 +335,23 @@ local dynamic_cfg = {
     replicaset_uuid         = check_replicaset_uuid,
     net_msg_max             = private.cfg_set_net_msg_max,
     sql_cache_size          = private.cfg_set_sql_cache_size,
+    txn_timeout             = private.cfg_set_txn_timeout,
+}
+
+-- dynamically settable options, which should be reverted in case
+-- there change fails.
+local dynamic_cfg_revert = {
+    listen                  = private.cfg_set_listen,
+}
+
+-- Values of dynamically settable options, the revert to which cannot fail.
+-- If trying to change the value of dynamically settable option fails, we
+-- try to rollback to previous value of this option. If rollback is also fails
+-- we rollback to the value, which contains here. This table should contain
+-- such values, that rollback for them can't fails. It's necessary to prevent
+-- inconsistent state.
+local default_cfg_on_revert = {
+    listen                  = nil,
 }
 
 ifdef_feedback = nil -- luacheck: ignore
@@ -483,6 +500,24 @@ local function upgrade_cfg(cfg, translate_cfg)
     return result_cfg
 end
 
+local function update_module_cfg(cfg, module_cfg)
+    local module_cfg_backup = {}
+    for field, api in pairs(module_cfg) do
+        if cfg[field] ~= nil then
+            module_cfg_backup[field] = api.cfg_get(field) or box.NULL
+
+            local ok, msg = api.cfg_set(cfg, field, cfg[field])
+            if not ok then
+                -- restore back the old values for modules
+                for k, v in pairs(module_cfg_backup) do
+                    module_cfg[k].cfg_set(cfg, k, v)
+                end
+                box.error(box.error.CFG, field, msg)
+            end
+        end
+    end
+end
+
 local function prepare_cfg(cfg, default_cfg, template_cfg,
                            module_cfg, modify_cfg, prefix)
     if cfg == nil then
@@ -500,7 +535,6 @@ local function prepare_cfg(cfg, default_cfg, template_cfg,
         readable_prefix = prefix .. '.'
     end
     local new_cfg = {}
-    local module_cfg_backup = {}
     for k,v in pairs(cfg) do
         local readable_name = readable_prefix .. k;
         if template_cfg[k] == nil then
@@ -516,25 +550,14 @@ local function prepare_cfg(cfg, default_cfg, template_cfg,
             end
             v = prepare_cfg(v, default_cfg[k], template_cfg[k],
                             module_cfg[k], modify_cfg[k], readable_name)
-        elseif template_cfg[k] == 'module' then
-            local old_value = module_cfg[k].cfg_get(k, v)
-            module_cfg_backup[k] = old_value or box.NULL
-
-            local ok, msg = module_cfg[k].cfg_set(cfg, k, v)
-            if not ok then
-                -- restore back the old values for modules
-                for module_k, module_v in pairs(module_cfg_backup) do
-                    module_cfg[module_k].cfg_set(nil, module_k, module_v)
-                end
-                box.error(box.error.CFG, readable_name, msg)
-            end
-        elseif (string.find(template_cfg[k], ',') == nil) then
+        elseif template_cfg[k] ~= 'module' and
+               (string.find(template_cfg[k], ',') == nil) then
             -- one type
             if type(v) ~= template_cfg[k] then
                 box.error(box.error.CFG, readable_name, "should be of type "..
                     template_cfg[k])
             end
-        else
+        elseif template_cfg[k] ~= 'module' then
             local good_types = string.gsub(template_cfg[k], ' ', '');
             if (string.find(',' .. good_types .. ',', ',' .. type(v) .. ',') == nil) then
                 box.error(box.error.CFG, readable_name, "should be one of types "..
@@ -584,15 +607,7 @@ local function compare_cfg(cfg1, cfg2)
     if type(cfg1) ~= 'table' then
         return cfg1 == cfg2
     end
-    if #cfg1 ~= #cfg2 then
-        return false
-    end
-    for k, v in ipairs(cfg1) do
-        if v ~= cfg2[k] then
-            return false
-        end
-    end
-    return true
+    return table.equals(cfg1, cfg2)
 end
 
 local function reload_cfg(oldcfg, cfg)
@@ -613,8 +628,23 @@ local function reload_cfg(oldcfg, cfg)
         local oldval = oldcfg[key]
         if not compare_cfg(val, oldval) then
             rawset(oldcfg, key, val)
-            if not pcall(dynamic_cfg[key]) then
+            local result, err = pcall(dynamic_cfg[key])
+            if not result then
+                local save_err = err
                 rawset(oldcfg, key, oldval) -- revert the old value
+                if dynamic_cfg_revert[key] then
+                    result, err = pcall(dynamic_cfg_revert[key])
+                    if not result then
+                        log.error("failed to revert '%s' " ..
+                                  "configuration option: %s",
+                                  key, err)
+                        -- We set the value from special table, rollback to
+                        -- which cannot fail.
+                        rawset(oldcfg, key, default_cfg_on_revert[key])
+                        assert(pcall(dynamic_cfg_revert[key]))
+                    end
+                end
+                box.error.set(save_err)
                 return box.error() -- re-throw
             end
             if log_cfg_option[key] ~= nil then
@@ -637,7 +667,9 @@ local box_cfg_guard_whitelist = {
     session = true;
     tuple = true;
     runtime = true;
-    ctl = true,
+    ctl = true;
+    watch = true;
+    broadcast = true;
     NULL = true;
 };
 
@@ -692,9 +724,11 @@ local function load_cfg(cfg)
     apply_default_cfg(cfg, default_cfg, module_cfg);
     -- Save new box.cfg
     box.cfg = cfg
-    if not pcall(private.cfg_check)  then
+    if not pcall(private.cfg_check) or
+       not pcall(update_module_cfg, cfg, module_cfg)  then
         box.cfg = locked(load_cfg) -- restore original box.cfg
-        return box.error() -- re-throw exception from check_cfg()
+        -- re-throw exception from check_cfg() or update_module_cfg()
+        return box.error()
     end
 
     -- NB: After this point the function should not raise an

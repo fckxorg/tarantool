@@ -219,7 +219,7 @@ IPROTO_AUTH               = 7
 IPROTO_STREAM_ID          = 0x0a
 ---
 ...
-next_request_id           = 9
+next_request_id           = 10
 ---
 ...
 test_run:cmd("setopt delimiter ';'")
@@ -239,12 +239,9 @@ body = msgpack.encode({nil});
 size = msgpack.encode(header:len() + body:len());
 ---
 ...
-conn._transport.perform_request(nil, nil, false, net_box._method.inject,
-                                nil, nil, nil, nil,
-                                size .. header .. body);
+conn:_request(net_box._method.inject, nil, nil, nil, size .. header .. body);
 ---
-- null
-- Unable to process AUTH request in stream
+- error: Unable to process AUTH request in stream
 ...
 test_run:cmd("setopt delimiter ''");
 ---

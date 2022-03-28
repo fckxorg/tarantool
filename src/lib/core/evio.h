@@ -37,7 +37,6 @@
 #include <stdbool.h>
 #include "tarantool_ev.h"
 #include "sio.h"
-#include "uri/uri.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -55,59 +54,64 @@ extern "C" {
  * a fiber and use coio.h (cooperative multi-tasking I/O)) API.
  *
  * How to use a service:
- * struct evio_service *service;
- * service = malloc(sizeof(struct evio_service));
- * evio_service_init(service, ..., on_accept_cb, ...);
- * evio_service_bind(service);
- * evio_service_listen(service);
+ * struct evio_service service;
+ * evio_service_create(loop(), &service, ..., on_accept_cb, ...);
+ * evio_service_bind(&service);
+ * evio_service_listen(&service);
  * ...
- * evio_service_stop(service);
- * free(service);
- *
- * If a service is not started, but only initialized, no
- * dedicated cleanup/destruction is necessary.
+ * evio_service_stop(&service);
  */
+struct evio_service_entry;
 struct evio_service;
+struct iostream;
+struct uri_set;
 
-typedef int (*evio_accept_f)(struct evio_service *, int, struct sockaddr *,
-			      socklen_t);
+typedef int
+(*evio_accept_f)(struct evio_service *service, struct iostream *io,
+		 struct sockaddr *addr, socklen_t addrlen);
 
-struct evio_service
-{
-	/** Service name. E.g. 'primary', 'secondary', etc. */
-	char name[SERVICE_NAME_MAXLEN];
-	/** Bind host:service, useful for logging */
-	char host[URI_MAXHOST];
-	char serv[URI_MAXSERVICE];
-
-	/** Interface/port to bind to */
-	union {
-		struct sockaddr addr;
-		struct sockaddr_storage addrstorage;
-	};
-	socklen_t addr_len;
-
-	/**
-	 * A callback invoked on every accepted client socket.
-	 * If a callback returned != 0, the accepted socket is
-	 * closed and the error is logged.
-	 */
-	evio_accept_f on_accept;
-	void *on_accept_param;
-
-	/** libev io object for the acceptor socket. */
-	struct ev_io ev;
-	ev_loop *loop;
+struct evio_service {
+        /** Total count of services */
+        int entry_count;
+        /** Array of structures that encapsulate work with sockets */
+        struct evio_service_entry *entries;
+        /** Service name. E.g. 'primary', 'secondary', etc. */
+        char name[SERVICE_NAME_MAXLEN];
+        /**
+         * A callback invoked on every accepted client socket.
+         * If a callback returned != 0, the accepted socket is
+         * closed and the error is logged.
+         *
+         * On success the callback must move the IO stream object
+         * it was passed.
+         */
+        evio_accept_f on_accept;
+        void *on_accept_param;
+        ev_loop *loop;
 };
+
+/**
+ * Return count of service entries in @a service
+ */
+int
+evio_service_count(const struct evio_service *service);
+
+/**
+ * Return struct which represent address served by entry with
+ * @a idx index in @a service. @a size contains structure length.
+ */
+const struct sockaddr *
+evio_service_addr(const struct evio_service *service, int idx, socklen_t *size);
 
 /** Initialize the service. Don't bind to the port yet. */
 void
-evio_service_init(ev_loop *loop, struct evio_service *service, const char *name,
-		  evio_accept_f on_accept, void *on_accept_param);
+evio_service_create(struct ev_loop *loop, struct evio_service *service,
+                    const char *name, evio_accept_f on_accept,
+                    void *on_accept_param);
 
 /** Bind service to specified uri */
 int
-evio_service_bind(struct evio_service *service, const char *uri);
+evio_service_bind(struct evio_service *service, const struct uri_set *uri_set);
 
 /**
  * Listen on bounded socket
@@ -125,23 +129,14 @@ evio_service_detach(struct evio_service *service);
 void
 evio_service_stop(struct evio_service *service);
 
-int
-evio_socket(struct ev_io *coio, int domain, int type, int protocol);
-
+/**
+ * Updates @a dst evio_service socket settings according @a src evio service.
+ */
 void
-evio_close(ev_loop *loop, struct ev_io *evio);
+evio_service_attach(struct evio_service *dst, const struct evio_service *src);
 
-static inline bool
-evio_service_is_active(struct evio_service *service)
-{
-	return service->ev.fd >= 0;
-}
-
-static inline bool
-evio_has_fd(struct ev_io *ev)
-{
-	return ev->fd >= 0;
-}
+bool
+evio_service_is_active(const struct evio_service *service);
 
 static inline void
 evio_timeout_init(ev_loop *loop, ev_tstamp *start, ev_tstamp *delay,

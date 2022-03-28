@@ -42,6 +42,7 @@ doc/*/Makefile
 extra/Makefile
 extra/*/Makefile
 extra/luarocks/hardcoded.lua
+extra/luarocks/hardcoded.lua.c
 perf/Makefile
 test/Makefile
 test/*/Makefile
@@ -91,6 +92,9 @@ src/tarantool
 src/module.h
 tarantool-*.tar.gz
 perf/*.perftest
+test/enterprise-luatest
+test/enterprise-tap
+test/enterprise-unit
 test/lib/
 test/unit/*.test
 test/unit/fiob

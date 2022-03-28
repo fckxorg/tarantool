@@ -189,6 +189,8 @@ struct space {
 	char *sequence_path;
 	/** Enable/disable triggers. */
 	bool run_triggers;
+	/** This space has foreign key constraints in its format. */
+	bool has_foreign_keys;
 	/**
 	 * Space format or NULL if space does not have format
 	 * (sysview engine, for example).
@@ -239,6 +241,8 @@ struct space {
 	 * Hash table with constraint identifiers hashed by name.
 	 */
 	struct mh_strnptr_t *constraint_ids;
+	/** List of space holders. This member is a property of space cache. */
+	struct rlist space_cache_pin_list;
 	/**
 	 * List of all tx stories in the space.
 	 */
@@ -250,6 +254,22 @@ int
 space_create(struct space *space, struct engine *engine,
 	     const struct space_vtab *vtab, struct space_def *def,
 	     struct rlist *key_list, struct tuple_format *format);
+
+/**
+ * Finish space initialization after finishing initial recovery. If a space was
+ * created during initial recovery some parts of its initialization was skipped
+ * because they were not possible yet.
+ * For example, all funcs are loaded after loading of all spaces, so if a space
+ * depend on some func in initialization, we have skip that part and come back
+ * later and call this function after initial recovery is finished.
+ * Actually, for simplicity, that function should be called with every @a space
+ * despite of its state, it will do no harm in any case. @a nothing argument
+ * is not used.
+ * Return 0 on success, -1 on error (diag is set) which actually means that
+ * we cannot start - something is broken in snapshot.
+ */
+int
+space_on_initial_recovery_complete(struct space *space, void *nothing);
 
 /** Get space ordinal number. */
 static inline uint32_t
@@ -490,6 +510,13 @@ space_is_memtx(struct space *space) { return space->engine->id == 0; }
 static inline bool
 space_is_vinyl(struct space *space) { return strcmp(space->engine->name, "vinyl") == 0; }
 
+/**
+ * Check that the space is a system space, which means that is has a special
+ * meaning for tarantool and has predefined insert/remove triggers.
+ */
+bool
+space_is_system(struct space *space);
+
 struct field_def;
 /**
  * Allocate and initialize a space.
@@ -553,7 +580,7 @@ space_find_constraint_id(struct space *space, const char *name);
  * constraints. That is used to prevent existence of constraints
  * with equal names.
  */
-int
+void
 space_add_constraint_id(struct space *space, struct constraint_id *id);
 
 /**

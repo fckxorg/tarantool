@@ -447,21 +447,17 @@ sqlVdbeRunOnlyOnce(Vdbe * p)
  * (1) For each jump instruction with a negative P2 value (a label)
  *     resolve the P2 value to an actual address.
  *
- * (2) Compute the maximum number of arguments used by any SQL function
- *     and store that value in *pMaxFuncArgs.
+ * (2) Initialize the p4.xAdvance pointer on opcodes that use it.
  *
- * (3) Initialize the p4.xAdvance pointer on opcodes that use it.
- *
- * (4) Reclaim the memory allocated for storing labels.
+ * (3) Reclaim the memory allocated for storing labels.
  *
  * This routine will only function correctly if the mkopcodeh.sh generator
  * script numbers the opcodes correctly.  Changes to this routine must be
  * coordinated with changes to mkopcodeh.sh.
  */
 static void
-resolveP2Values(Vdbe * p, int *pMaxFuncArgs)
+resolveP2Values(Vdbe * p)
 {
-	int nMaxArgs = *pMaxFuncArgs;
 	Op *pOp;
 	Parse *pParse = p->pParse;
 	int *aLabel = pParse->aLabel;
@@ -506,7 +502,6 @@ resolveP2Values(Vdbe * p, int *pMaxFuncArgs)
 	sqlDbFree(p->db, pParse->aLabel);
 	pParse->aLabel = 0;
 	pParse->nLabel = 0;
-	*pMaxFuncArgs = nMaxArgs;
 }
 
 /*
@@ -526,17 +521,15 @@ sqlVdbeCurrentAddr(Vdbe * p)
  * vdbeFreeOpArray() function.
  *
  * Before returning, *pnOp is set to the number of entries in the returned
- * array. Also, *pnMaxArg is set to the larger of its current value and
- * the number of entries in the Vdbe.apArg[] array required to execute the
- * returned program.
+ * array.
  */
-VdbeOp *
-sqlVdbeTakeOpArray(Vdbe * p, int *pnOp, int *pnMaxArg)
+struct VdbeOp *
+sqlVdbeTakeOpArray(struct Vdbe *p, int *pnOp)
 {
 	VdbeOp *aOp = p->aOp;
 	assert(aOp && !p->db->mallocFailed);
 
-	resolveP2Values(p, pnMaxArg);
+	resolveP2Values(p);
 	*pnOp = p->nOp;
 	p->aOp = 0;
 	return aOp;
@@ -590,21 +583,16 @@ sqlVdbeJumpHere(Vdbe * p, int addr)
 
 static void vdbeFreeOpArray(sql *, Op *, int);
 
-static SQL_NOINLINE void
-freeP4FuncCtx(sql * db, sql_context * p)
-{
-	sqlDbFree(db, p);
-}
-
 static void
 freeP4(sql * db, int p4type, void *p4)
 {
 	assert(db);
 	switch (p4type) {
 	case P4_FUNCCTX:{
-			freeP4FuncCtx(db, (sql_context *) p4);
+			sql_context_delete(p4);
 			break;
 		}
+	case P4_DEC:
 	case P4_REAL:
 	case P4_INT64:
 	case P4_UINT64:
@@ -1068,14 +1056,12 @@ displayP4(Op * pOp, char *zTemp, int nTemp)
 				   func->def->param_count);
 			break;
 		}
-#if defined(SQL_DEBUG) || defined(VDBE_PROFILE)
 	case P4_FUNCCTX:{
-			struct func *func = pOp->p4.func;
+			struct func *func = pOp->p4.pCtx->func;
 			sqlXPrintf(&x, "%s(%d)", func->def->name,
 				   func->def->param_count);
 			break;
 		}
-#endif
 	case P4_BOOL:
 			sqlXPrintf(&x, "%d", pOp->p4.b);
 			break;
@@ -1093,6 +1079,10 @@ displayP4(Op * pOp, char *zTemp, int nTemp)
 		}
 	case P4_REAL:{
 			sqlXPrintf(&x, "%.16g", *pOp->p4.pReal);
+			break;
+		}
+	case P4_DEC:{
+			sqlXPrintf(&x, "%s", decimal_str(pOp->p4.dec));
 			break;
 		}
 	case P4_MEM:{
@@ -1302,14 +1292,9 @@ sqlVdbeList(Vdbe * p)
 					if (mem_copy_bin(pSub, bin, size) != 0)
 						return -1;
 				} else if (j == nSub) {
-					struct Mem tmp;
-					mem_create(&tmp);
-					uint32_t size = sizeof(SubProgram *);
 					char *bin = (char *)&pOp->p4.pProgram;
-					mem_set_bin_ephemeral(&tmp, bin, size);
-					int rc = mem_concat(pSub, &tmp, pSub);
-					mem_destroy(&tmp);
-					if (rc != 0)
+					uint32_t size = sizeof(SubProgram *);
+					if (mem_append(pSub, bin, size) != 0)
 						return -1;
 				}
 			}
@@ -1498,7 +1483,6 @@ sqlVdbeMakeReady(Vdbe * p,	/* The VDBE */
 	int nVar;		/* Number of parameters */
 	int nMem;		/* Number of VM memory registers */
 	int nCursor;		/* Number of cursors required */
-	int nArg;		/* Number of arguments in subprograms */
 	int n;			/* Loop counter */
 	struct ReusableSpace x;	/* Reusable bulk memory */
 
@@ -1512,7 +1496,6 @@ sqlVdbeMakeReady(Vdbe * p,	/* The VDBE */
 	nVar = pParse->nVar;
 	nMem = pParse->nMem;
 	nCursor = pParse->nTab;
-	nArg = pParse->nMaxArg;
 
 	/* Each cursor uses a memory cell.  The first cursor (cursor 0) can
 	 * use aMem[0] which is not otherwise used by the VDBE program.  Allocate
@@ -1534,7 +1517,7 @@ sqlVdbeMakeReady(Vdbe * p,	/* The VDBE */
 	assert(x.nFree >= 0);
 	assert(EIGHT_BYTE_ALIGNMENT(&x.pSpace[x.nFree]));
 
-	resolveP2Values(p, &nArg);
+	resolveP2Values(p);
 	if (pParse->explain && nMem < 10) {
 		nMem = 10;
 	}
@@ -1554,7 +1537,6 @@ sqlVdbeMakeReady(Vdbe * p,	/* The VDBE */
 		x.nNeeded = 0;
 		p->aMem = allocSpace(&x, p->aMem, nMem * sizeof(Mem));
 		p->aVar = allocSpace(&x, p->aVar, nVar * sizeof(Mem));
-		p->apArg = allocSpace(&x, p->apArg, nArg * sizeof(Mem *));
 		p->apCsr =
 		    allocSpace(&x, p->apCsr, nCursor * sizeof(VdbeCursor *));
 		if (x.nNeeded == 0)
@@ -2303,31 +2285,12 @@ sqlVdbeDb(Vdbe * v)
 	return v->db;
 }
 
-/*
- * Return a pointer to an sql_value structure containing the value bound
- * parameter iVar of VM v. Except, if the value is an SQL NULL, return
- * 0 instead. Unless it is NULL, apply type to the value before returning it.
- *
- * The returned value must be freed by the caller using sqlValueFree().
- */
-sql_value *
-sqlVdbeGetBoundValue(struct Vdbe *v, int iVar)
+const struct Mem *
+vdbe_get_bound_value(struct Vdbe *vdbe, int id)
 {
-	assert(iVar > 0);
-	if (v) {
-		Mem *pMem = &v->aVar[iVar - 1];
-		if (!mem_is_null(pMem)) {
-			sql_value *pRet = sqlValueNew(v->db);
-			if (pRet == NULL)
-				return NULL;
-			if (mem_copy(pRet, pMem) != 0) {
-				sqlValueFree(pRet);
-				return NULL;
-			}
-			return pRet;
-		}
-	}
-	return 0;
+	if (vdbe == NULL || id < 0 || id >= vdbe->nVar)
+		return NULL;
+	return &vdbe->aVar[id];
 }
 
 void

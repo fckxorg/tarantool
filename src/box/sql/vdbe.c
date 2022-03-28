@@ -253,7 +253,8 @@ allocateCursor(
 
 #ifdef SQL_DEBUG
 #  define REGISTER_TRACE(P,R,M)					\
-	if(P->sql_flags&SQL_VdbeTrace) registerTrace(R,M);
+	if ((P->sql_flags & SQL_VdbeTrace) != 0)		\
+		printf("REG[%d] = %s\n", R, mem_str(M));
 #else
 #  define REGISTER_TRACE(P,R,M)
 #endif
@@ -804,6 +805,18 @@ case OP_Real: {            /* same as TK_FLOAT, out2 */
 	break;
 }
 
+/**
+ * Opcode: Decimal * P2 * P4 *
+ * Synopsis: r[P2]=P4
+ *
+ * P4 is a pointer to a DECIMAL value. Write that value into register P2.
+ */
+case OP_Decimal: {            /* same as TK_DECIMAL, out2 */
+	pOut = vdbe_prepare_null_out(p, pOp->p2);
+	mem_set_dec(pOut, pOp->p4.dec);
+	break;
+}
+
 /* Opcode: String8 * P2 * P4 *
  * Synopsis: r[P2]='P4'
  *
@@ -1159,115 +1172,50 @@ case OP_Remainder: {           /* same as TK_REM, in1, in2, out3 */
 	break;
 }
 
-/* Opcode: CollSeq P1 * * P4
- *
- * P4 is a pointer to a CollSeq struct. If the next call to a user function
- * or aggregate calls sqlGetFuncCollSeq(), this collation sequence will
- * be returned. This is used by the built-in min(), max() and nullif()
- * functions.
+/* Opcode: SkipLoad P1 * * * *
  *
  * If P1 is not zero, then it is a register that a subsequent min() or
  * max() aggregate will set to true if the current row is not the minimum or
  * maximum.  The P1 register is initialized to false by this instruction.
- *
- * The interface used by the implementation of the aforementioned functions
- * to retrieve the collation sequence set by this opcode is not available
- * publicly.  Only built-in functions have access to this feature.
  */
-case OP_CollSeq: {
-	assert(pOp->p4type==P4_COLLSEQ || pOp->p4.pColl == NULL);
+case OP_SkipLoad: {
 	if (pOp->p1) {
 		mem_set_bool(&aMem[pOp->p1], false);
 	}
 	break;
 }
 
-/* Opcode: BuiltinFunction0 P1 P2 P3 P4 P5
- * Synopsis: r[P3]=func(r[P2@P5])
- *
- * Invoke a user function (P4 is a pointer to a FuncDef object that
- * defines the function) with P5 arguments taken from register P2 and
- * successors.  The result of the function is stored in register P3.
- * Register P3 must not be one of the function inputs.
- *
- * P1 is a 32-bit bitmask indicating whether or not each argument to the
- * function was determined to be constant at compile time. If the first
- * argument was constant then bit 0 of P1 is set.
- *
- * See also: BuiltinFunction, AggStep, AggFinal
- */
-/* Opcode: BuiltinFunction P1 P2 P3 P4 P5
- * Synopsis: r[P3]=func(r[P2@P5])
+/* Opcode: BuiltinFunction P1 P2 P3 P4 *
+ * Synopsis: r[P3]=func(r[P2@P1])
  *
  * Invoke a user function (P4 is a pointer to an sql_context object that
- * contains a pointer to the function to be run) with P5 arguments taken
+ * contains a pointer to the function to be run) with P1 arguments taken
  * from register P2 and successors.  The result of the function is stored
  * in register P3.  Register P3 must not be one of the function inputs.
  *
- * P1 is a 32-bit bitmask indicating whether or not each argument to the
- * function was determined to be constant at compile time. If the first
- * argument was constant then bit 0 of P1 is set.
- *
- * SQL functions are initially coded as OP_BuiltinFunction0 with
- * P4 pointing to a FuncDef object.  But on first evaluation,
- * the P4 operand is automatically converted into an sql_context
- * object and the operation changed to this OP_BuiltinFunction
- * opcode.  In this way, the initialization of the sql_context
- * object occurs only once, rather than once for each evaluation
- * of the function.
- *
- * See also: BuiltinFunction0, AggStep, AggFinal
+ * See also: AggStep, AggFinal
  */
-case OP_BuiltinFunction0: {
-	int n;
-	sql_context *pCtx;
-
-	assert(pOp->p4type == P4_FUNC);
-	n = pOp->p5;
-	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
-	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
-	assert(pOp->p3<pOp->p2 || pOp->p3>=pOp->p2+n);
-	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
-	if (pCtx==0) goto no_mem;
-	pCtx->pOut = 0;
-	pCtx->func = pOp->p4.func;
-	pCtx->iOp = (int)(pOp - aOp);
-	pCtx->pVdbe = p;
-	pCtx->argc = n;
-	pOp->p4type = P4_FUNCCTX;
-	pOp->p4.pCtx = pCtx;
-	pOp->opcode = OP_BuiltinFunction;
-	/* Fall through into OP_BuiltinFunction */
-	FALLTHROUGH;
-}
 case OP_BuiltinFunction: {
-	int i;
+	int argc = pOp->p1;
 	sql_context *pCtx;
 
 	assert(pOp->p4type==P4_FUNCCTX);
 	pCtx = pOp->p4.pCtx;
 
-	/* If this function is inside of a trigger, the register array in aMem[]
-	 * might change from one evaluation to the next.  The next block of code
-	 * checks to see if the register array has changed, and if so it
-	 * reinitializes the relavant parts of the sql_context object
-	 */
 	pOut = vdbe_prepare_null_out(p, pOp->p3);
-	if (pCtx->pOut != pOut) {
+	if (pCtx->pOut != pOut)
 		pCtx->pOut = pOut;
-		for(i=pCtx->argc-1; i>=0; i--) pCtx->argv[i] = &aMem[pOp->p2+i];
-	}
 
 #ifdef SQL_DEBUG
-	for(i=0; i<pCtx->argc; i++) {
-		assert(memIsValid(pCtx->argv[i]));
-		REGISTER_TRACE(p, pOp->p2+i, pCtx->argv[i]);
+	for(int i = 0; i < argc; i++) {
+		assert(memIsValid(&aMem[pOp->p2 + i]));
+		REGISTER_TRACE(p, pOp->p2 + i, &aMem[pOp->p2 + i]);
 	}
 #endif
 	pCtx->is_aborted = false;
 	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
 	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
-	func->call(pCtx, pCtx->argc, pCtx->argv);
+	func->call(pCtx, argc, &aMem[pOp->p2]);
 
 	/* If the function returned an error, throw an exception */
 	if (pCtx->is_aborted)
@@ -1283,11 +1231,11 @@ case OP_BuiltinFunction: {
 	break;
 }
 
-/* Opcode: FunctionByName * P2 P3 P4 P5
- * Synopsis: r[P3]=func(r[P2@P5])
+/* Opcode: FunctionByName P1 P2 P3 P4 *
+ * Synopsis: r[P3]=func(r[P2@P1])
  *
  * Invoke a user function (P4 is a pointer to a function object
- * that defines the function) with P5 arguments taken from
+ * that defines the function) with P1 arguments taken from
  * register P2 and successors. The result of the function is
  * stored in register P3.
  */
@@ -1303,7 +1251,7 @@ case OP_FunctionByName: {
 	 * turn out to be invalid after call.
 	 */
 	enum field_type returns = func->def->returns;
-	int argc = pOp->p5;
+	int argc = pOp->p1;
 	struct Mem *argv = &aMem[pOp->p2];
 	struct port args, ret;
 
@@ -1316,12 +1264,15 @@ case OP_FunctionByName: {
 	pOut = vdbe_prepare_null_out(p, pOp->p3);
 	uint32_t size;
 	struct Mem *mem = (struct Mem *)port_get_vdbemem(&ret, &size);
-	if (mem != NULL && size > 0)
-		*pOut = mem[0];
 	port_destroy(&ret);
-	region_truncate(region, region_svp);
-	if (mem == NULL)
+	if (mem == NULL) {
+		region_truncate(region, region_svp);
 		goto abort_due_to_error;
+	}
+	assert(size == 1);
+	mem_move(pOut, &mem[0]);
+	assert(mem_is_null(&mem[0]) && mem_is_trivial(&mem[0]));
+	region_truncate(region, region_svp);
 	if (!mem_is_field_compatible(pOut, returns)) {
 		diag_set(ClientError, ER_FUNC_INVALID_RETURN_TYPE, pOp->p4.z,
 			 field_type_strs[returns],
@@ -1462,8 +1413,6 @@ case OP_MustBeInt: {            /* jump, in1 */
  */
 case OP_Cast: {                  /* in1 */
 	pIn1 = &aMem[pOp->p1];
-	if (ExpandBlob(pIn1) != 0)
-		goto abort_due_to_error;
 	rc = mem_cast_explicit(pIn1, pOp->p2);
 	UPDATE_MAX_BLOBSIZE(pIn1);
 	if (rc == 0)
@@ -1471,6 +1420,26 @@ case OP_Cast: {                  /* in1 */
 	diag_set(ClientError, ER_SQL_TYPE_MISMATCH, mem_str(pIn1),
 		 field_type_strs[pOp->p2]);
 	goto abort_due_to_error;
+}
+
+/* Opcode: Array P1 P2 P3 * *
+ * Synopsis: r[P2]=array(P3@P1)
+ *
+ * Construct an ARRAY value from P1 registers starting at reg(P3).
+ */
+case OP_Array: {
+	pOut = &aMem[pOp->p2];
+
+	uint32_t size;
+	struct region *region = &fiber()->gc;
+	size_t svp = region_used(region);
+	char *val = mem_encode_array(&aMem[pOp->p3], pOp->p1, &size, region);
+	if (val == NULL || mem_copy_array(pOut, val, size) != 0) {
+		region_truncate(region, svp);
+		goto abort_due_to_error;
+	}
+	region_truncate(region, svp);
+	break;
 }
 
 /* Opcode: Eq P1 P2 P3 P4 P5
@@ -1989,7 +1958,9 @@ case OP_Column: {
 	/* Currently PSEUDO cursor does not have info about field types. */
 	if (pC->eCurType == CURTYPE_TARANTOOL)
 		field_type = pC->uc.pCursor->space->def->fields[p2].type;
-	if (field_type == FIELD_TYPE_SCALAR)
+	if (field_type == FIELD_TYPE_ANY)
+		pDest->flags |= MEM_Any;
+	else if (field_type == FIELD_TYPE_SCALAR)
 		pDest->flags |= MEM_Scalar;
 	else if (field_type == FIELD_TYPE_NUMBER)
 		pDest->flags |= MEM_Number;
@@ -2089,8 +2060,7 @@ case OP_MakeRecord: {
 	struct region *region = &fiber()->gc;
 	size_t used = region_used(region);
 	uint32_t tuple_size;
-	char *tuple =
-		sql_vdbe_mem_encode_tuple(pData0, nField, &tuple_size, region);
+	char *tuple = mem_encode_array(pData0, nField, &tuple_size, region);
 	if (tuple == NULL)
 		goto abort_due_to_error;
 	if ((int64_t)tuple_size > db->aLimit[SQL_LIMIT_LENGTH])
@@ -2772,8 +2742,6 @@ case OP_Found: {        /* jump, in3 */
 #ifdef SQL_DEBUG
 		for(ii=0; ii<r.nField; ii++) {
 			assert(memIsValid(&r.aMem[ii]));
-			assert(!mem_is_zerobin(&r.aMem[ii]) ||
-			       r.aMem[ii].n == 0);
 			if (ii != 0)
 				REGISTER_TRACE(p, pOp->p3+ii, &r.aMem[ii]);
 		}
@@ -2784,7 +2752,6 @@ case OP_Found: {        /* jump, in3 */
 		pFree = pIdxKey = sqlVdbeAllocUnpackedRecord(db, pC->key_def);
 		if (pIdxKey==0) goto no_mem;
 		assert(mem_is_bin(pIn3));
-		(void)ExpandBlob(pIn3);
 		sqlVdbeRecordUnpackMsgpack(pC->key_def,
 					       pIn3->z, pIdxKey);
 	}
@@ -3411,8 +3378,7 @@ case OP_SorterInsert: {      /* in2 */
 	assert(isSorter(cursor));
 	pIn2 = &aMem[pOp->p2];
 	assert(mem_is_bin(pIn2));
-	if (ExpandBlob(pIn2) != 0 ||
-	    sqlVdbeSorterWrite(cursor, pIn2) != 0)
+	if (sqlVdbeSorterWrite(cursor, pIn2) != 0)
 		goto abort_due_to_error;
 	break;
 }
@@ -3445,8 +3411,6 @@ case OP_IdxReplace:
 case OP_IdxInsert: {
 	pIn2 = &aMem[pOp->p1];
 	assert(mem_is_bin(pIn2));
-	if (ExpandBlob(pIn2) != 0)
-		goto abort_due_to_error;
 	struct space *space;
 	if (pOp->p4type == P4_SPACEPTR)
 		space = pOp->p4.space;
@@ -3556,7 +3520,7 @@ case OP_Update: {
 		mpstream_encode_array(&stream, 3);
 		mpstream_encode_strn(&stream, "=", 1);
 		mpstream_encode_uint(&stream, field_idx);
-		mpstream_encode_vdbe_mem(&stream, new_tuple + field_idx);
+		mem_to_mpstream(new_tuple + field_idx, &stream);
 	}
 	mpstream_flush(&stream);
 	if (is_error) {
@@ -4185,128 +4149,66 @@ case OP_DecrJumpZero: {      /* jump, in1 */
 }
 
 
-/* Opcode: AggStep0 * P2 P3 P4 P5
- * Synopsis: accum=r[P3] step(r[P2@P5])
+/* Opcode: AggStep P1 P2 P3 P4 *
+ * Synopsis: accum=r[P3] step(r[P2@P1])
  *
  * Execute the step function for an aggregate.  The
- * function has P5 arguments.   P4 is a pointer to the FuncDef
- * structure that specifies the function.  Register P3 is the
- * accumulator.
- *
- * The P5 arguments are taken from register P2 and its
- * successors.
- */
-/* Opcode: AggStep * P2 P3 P4 P5
- * Synopsis: accum=r[P3] step(r[P2@P5])
- *
- * Execute the step function for an aggregate.  The
- * function has P5 arguments.   P4 is a pointer to an sql_context
+ * function has P1 arguments.   P4 is a pointer to an sql_context
  * object that is used to run the function.  Register P3 is
  * as the accumulator.
  *
- * The P5 arguments are taken from register P2 and its
+ * The P1 arguments are taken from register P2 and its
  * successors.
- *
- * This opcode is initially coded as OP_AggStep0.  On first evaluation,
- * the FuncDef stored in P4 is converted into an sql_context and
- * the opcode is changed.  In this way, the initialization of the
- * sql_context only happens once, instead of on each call to the
- * step function.
  */
-case OP_AggStep0: {
-	int n;
-	sql_context *pCtx;
-
-	assert(pOp->p4type == P4_FUNC);
-	n = pOp->p5;
-	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
-	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
-	assert(pOp->p3<pOp->p2 || pOp->p3>=pOp->p2+n);
-	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
-	if (pCtx==0) goto no_mem;
-	pCtx->pMem = 0;
-	pCtx->func = pOp->p4.func;
-	pCtx->iOp = (int)(pOp - aOp);
-	pCtx->pVdbe = p;
-	pCtx->argc = n;
-	pOp->p4type = P4_FUNCCTX;
-	pOp->p4.pCtx = pCtx;
-	pOp->opcode = OP_AggStep;
-	/* Fall through into OP_AggStep */
-	FALLTHROUGH;
-}
 case OP_AggStep: {
-	int i;
+	int argc = pOp->p1;
 	sql_context *pCtx;
 	Mem *pMem;
-	Mem t;
 
 	assert(pOp->p4type==P4_FUNCCTX);
 	pCtx = pOp->p4.pCtx;
 	pMem = &aMem[pOp->p3];
 
-	/* If this function is inside of a trigger, the register array in aMem[]
-	 * might change from one evaluation to the next.  The next block of code
-	 * checks to see if the register array has changed, and if so it
-	 * reinitializes the relavant parts of the sql_context object
-	 */
-	if (pCtx->pMem != pMem) {
-		pCtx->pMem = pMem;
-		for(i=pCtx->argc-1; i>=0; i--) pCtx->argv[i] = &aMem[pOp->p2+i];
-	}
+	if (pCtx->pOut != pMem)
+		pCtx->pOut = pMem;
 
 #ifdef SQL_DEBUG
-	for(i=0; i<pCtx->argc; i++) {
-		assert(memIsValid(pCtx->argv[i]));
-		REGISTER_TRACE(p, pOp->p2+i, pCtx->argv[i]);
+	for(int i = 0; i < argc; i++) {
+		assert(memIsValid(&aMem[pOp->p2 + i]));
+		REGISTER_TRACE(p, pOp->p2 + i, &aMem[pOp->p2 + i]);
 	}
 #endif
 
-	pMem->n++;
-	mem_create(&t);
-	pCtx->pOut = &t;
-	pCtx->is_aborted = false;
 	pCtx->skipFlag = 0;
 	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
 	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
-	func->call(pCtx, pCtx->argc, pCtx->argv);
-	if (pCtx->is_aborted) {
-		mem_destroy(&t);
+	func->call(pCtx, argc, &aMem[pOp->p2]);
+	if (pCtx->is_aborted)
 		goto abort_due_to_error;
-	}
-	assert(mem_is_null(&t));
 	if (pCtx->skipFlag) {
-		assert(pOp[-1].opcode==OP_CollSeq);
-		i = pOp[-1].p1;
+		assert(pOp[-1].opcode == OP_SkipLoad);
+		int i = pOp[-1].p1;
 		if (i) mem_set_bool(&aMem[i], true);
 	}
 	break;
 }
 
-/* Opcode: AggFinal P1 P2 * P4 *
- * Synopsis: accum=r[P1] N=P2
+/* Opcode: AggFinal P1 * * P4 *
+ * Synopsis: accum=r[P1]
  *
- * Execute the finalizer function for an aggregate.  P1 is
- * the memory location that is the accumulator for the aggregate.
- *
- * P2 is the number of arguments that the step function takes and
- * P4 is a pointer to the FuncDef for this function.  The P2
- * argument is not used by this opcode.  It is only there to disambiguate
- * functions that can take varying numbers of arguments.  The
- * P4 argument is only needed for the degenerate case where
- * the step function was not previously called.
+ * Execute the finalizer function for an aggregate. P1 is the memory location
+ * that is the accumulator for the aggregate. P4 is a pointer to the function.
  */
 case OP_AggFinal: {
-	Mem *pMem;
 	assert(pOp->p1>0 && pOp->p1<=(p->nMem+1 - p->nCursor));
-	pMem = &aMem[pOp->p1];
-	assert(mem_is_null(pMem) || mem_is_agg(pMem));
-	if (sql_vdbemem_finalize(pMem, pOp->p4.func) != 0)
+	struct func_sql_builtin *func = (struct func_sql_builtin *)pOp->p4.func;
+	struct Mem *pIn1 = &aMem[pOp->p1];
+
+	if (func->finalize != NULL && func->finalize(pIn1) != 0)
 		goto abort_due_to_error;
-	UPDATE_MAX_BLOBSIZE(pMem);
-	if (sqlVdbeMemTooBig(pMem)) {
+	UPDATE_MAX_BLOBSIZE(pIn1);
+	if (sqlVdbeMemTooBig(pIn1) != 0)
 		goto too_big;
-	}
 	break;
 }
 
@@ -4507,11 +4409,13 @@ default: {          /* This is really OP_Noop and OP_Explain */
 		if ((p->sql_flags & SQL_VdbeTrace) != 0) {
 			u8 opProperty = sqlOpcodeProperty[pOrigOp->opcode];
 			if (rc!=0) printf("rc=%d\n",rc);
-			if (opProperty & (OPFLG_OUT2)) {
-				registerTrace(pOrigOp->p2, &aMem[pOrigOp->p2]);
+			if ((opProperty & OPFLG_OUT2) != 0) {
+				REGISTER_TRACE(p, pOrigOp->p2,
+					       &aMem[pOrigOp->p2]);
 			}
-			if (opProperty & OPFLG_OUT3) {
-				registerTrace(pOrigOp->p3, &aMem[pOrigOp->p3]);
+			if ((opProperty & OPFLG_OUT3) != 0) {
+				REGISTER_TRACE(p, pOrigOp->p3,
+					       &aMem[pOrigOp->p3]);
 			}
 		}
 #endif  /* SQL_DEBUG */

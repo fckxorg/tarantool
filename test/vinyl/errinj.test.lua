@@ -3,9 +3,6 @@ fio = require('fio')
 fiber = require('fiber')
 errinj = box.error.injection
 
-test_run:cmd("push filter 'Invalid VYLOG file: Slice [0-9]+ deleted but not registered'" .. \
-             " to 'Invalid VYLOG file: Slice <NUM> deleted but not registered'")
-
 --
 -- Lost data in case of dump error
 --
@@ -372,7 +369,7 @@ s:drop()
 fiber = require('fiber')
 errinj = box.error.injection
 
-s = box.schema.space.create('test', {engine = 'vinyl'})
+s = box.schema.space.create('test', {engine = 'vinyl', defer_deletes = true})
 _ = s:create_index('pk', {run_count_per_level = 10})
 _ = s:create_index('sk', {unique = false, parts = {2, 'unsigned'}})
 s:replace{1, 10}

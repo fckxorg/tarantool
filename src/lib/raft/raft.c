@@ -35,11 +35,6 @@
 #include "tt_static.h"
 
 /**
- * Maximal random deviation of the election timeout. From the configured value.
- */
-#define RAFT_RANDOM_ELECTION_FACTOR 0.1
-
-/**
  * When decoding we should never trust that there is
  * a valid data incomes.
  */
@@ -124,10 +119,7 @@ raft_new_random_election_shift(const struct raft *raft)
 {
 	double timeout = raft->election_timeout;
 	/* Translate to ms. Integer is needed to be able to use mod below. */
-	uint32_t rand_part =
-		(uint32_t)(timeout * RAFT_RANDOM_ELECTION_FACTOR * 1000);
-	if (rand_part == 0)
-		rand_part = 1;
+	uint32_t rand_part = (uint32_t)(timeout * raft->max_shift * 1000);
 	/*
 	 * XXX: this is not giving a good distribution, but it is not so trivial
 	 * to implement a correct random value generator. There is a task to
@@ -152,9 +144,75 @@ raft_can_vote_for(const struct raft *raft, const struct vclock *v)
 	return cmp == 0 || cmp == 1;
 }
 
+static bool
+raft_add_vote(struct raft *raft, int src, int dst)
+{
+	struct raft_vote *v = &raft->votes[src];
+	if (v->did_vote)
+		return false;
+	v->did_vote = true;
+	++raft->voted_count;
+	int count = ++raft->votes[dst].count;
+	if (count > raft->max_vote)
+		raft->max_vote = count;
+	return true;
+}
+
+static bool
+raft_has_split_vote(const struct raft *raft)
+{
+	int vote_vac = raft->cluster_size;
+	int quorum = raft->election_quorum;
+	/*
+	 * Quorum > cluster is either a misconfiguration or some instances
+	 * didn't register yet. Anyway, speeding the elections up won't help.
+	 * The same when more nodes voted than there are nodes configured.
+	 */
+	if (vote_vac < quorum)
+		return false;
+	vote_vac -= raft->voted_count;
+	if (vote_vac < 0)
+		return false;
+	return raft->max_vote + vote_vac < quorum;
+}
+
+static int
+raft_scores_snprintf(const struct raft *raft, char *buf, int size)
+{
+	int total = 0;
+	bool is_empty = true;
+	SNPRINT(total, snprintf, buf, size, "{");
+	for (int i = 0; i < VCLOCK_MAX; ++i) {
+		int count = raft->votes[i].count;
+		if (count == 0)
+			continue;
+		if (!is_empty)
+			SNPRINT(total, snprintf, buf, size, ", ");
+		else
+			is_empty = false;
+		SNPRINT(total, snprintf, buf, size, "%d: %d", i, count);
+	}
+	SNPRINT(total, snprintf, buf, size, "}");
+	return total;
+}
+
+static const char *
+raft_scores_str(const struct raft *raft)
+{
+	char *buf = tt_static_buf();
+	int rc = raft_scores_snprintf(raft, buf, TT_STATIC_BUF_LEN);
+	assert(rc >= 0);
+	(void)rc;
+	return buf;
+}
+
 /** Schedule broadcast of the complete Raft state to all the followers. */
 static void
 raft_schedule_broadcast(struct raft *raft);
+
+/** If there is split vote, the node might reduce the next term delay. */
+static void
+raft_check_split_vote(struct raft *raft);
 
 /** Raft state machine methods. 'sm' stands for State Machine. */
 
@@ -279,6 +337,12 @@ void
 raft_process_recovery(struct raft *raft, const struct raft_msg *req)
 {
 	say_verbose("RAFT: recover %s", raft_msg_to_string(req));
+	/*
+	 * Instance ID is unknown until recovery ends. Because apparently it can
+	 * change during join. In Raft it is set only one time when recovery
+	 * ends for good.
+	 */
+	assert(raft->self == 0);
 	if (req->term != 0) {
 		raft->term = req->term;
 		raft->volatile_term = req->term;
@@ -335,6 +399,9 @@ raft_process_msg(struct raft *raft, const struct raft_msg *req, uint32_t source)
 	 * persisted long time ago and still broadcasted. Or a vote response.
 	 */
 	if (req->vote != 0) {
+		if (raft_add_vote(raft, source, req->vote))
+		    raft_check_split_vote(raft);
+
 		switch (raft->state) {
 		case RAFT_STATE_FOLLOWER:
 		case RAFT_STATE_LEADER:
@@ -395,11 +462,10 @@ raft_process_msg(struct raft *raft, const struct raft_msg *req, uint32_t source)
 			 * and now was answered by some other instance.
 			 */
 			assert(raft->volatile_vote == raft->self);
-			bool was_set = bit_set(&raft->vote_mask, source);
-			raft->vote_count += !was_set;
-			if (raft->vote_count < raft->election_quorum) {
+			int vote_count = raft_vote_count(raft);
+			if (vote_count < raft->election_quorum) {
 				say_info("RAFT: accepted vote for self, vote "
-					 "count is %d/%d", raft->vote_count,
+					 "count is %d/%d", vote_count,
 					 raft->election_quorum);
 				break;
 			}
@@ -420,6 +486,7 @@ raft_process_msg(struct raft *raft, const struct raft_msg *req, uint32_t source)
 			 * it manually.
 			 */
 			raft->leader = 0;
+			raft_schedule_broadcast(raft);
 			if (raft->is_candidate)
 				raft_sm_schedule_new_election(raft);
 		}
@@ -478,7 +545,7 @@ raft_process_heartbeat(struct raft *raft, uint32_t source)
 	 * anything was heard from the leader. Then in the timer callback check
 	 * the timestamp, and restart the timer, if it is fine.
 	 */
-	assert(raft_ev_is_active(&raft->timer));
+	assert(raft_ev_timer_is_active(&raft->timer));
 	raft_ev_timer_stop(raft_loop(), &raft->timer);
 	raft_sm_wait_leader_dead(raft);
 }
@@ -640,13 +707,11 @@ raft_sm_become_candidate(struct raft *raft)
 	assert(raft->state == RAFT_STATE_FOLLOWER);
 	assert(raft->leader == 0);
 	assert(raft->vote == raft->self);
+	assert(raft_vote_count(raft) >= 1);
 	assert(raft->is_candidate);
 	assert(!raft->is_write_in_progress);
 	assert(raft->election_quorum > 1);
 	raft->state = RAFT_STATE_CANDIDATE;
-	raft->vote_count = 1;
-	raft->vote_mask = 0;
-	bit_set(&raft->vote_mask, raft->self);
 	raft_sm_wait_election_end(raft);
 	/* State is visible and it is changed - broadcast. */
 	raft_schedule_broadcast(raft);
@@ -663,6 +728,9 @@ raft_sm_schedule_new_term(struct raft *raft, uint64_t new_term)
 	raft->volatile_vote = 0;
 	raft->leader = 0;
 	raft->state = RAFT_STATE_FOLLOWER;
+	memset(raft->votes, 0, sizeof(raft->votes));
+	raft->voted_count = 0;
+	raft->max_vote = 0;
 	/*
 	 * The instance could be promoted for the previous term. But promotion
 	 * has no effect on following terms.
@@ -684,7 +752,9 @@ raft_sm_schedule_new_vote(struct raft *raft, uint32_t new_vote)
 	assert(raft->volatile_vote == 0);
 	assert(raft->leader == 0);
 	assert(raft->state == RAFT_STATE_FOLLOWER);
+	assert(!raft->votes[raft->self].did_vote);
 	raft->volatile_vote = new_vote;
+	raft_add_vote(raft, raft->self, raft->self);
 	raft_sm_pause_and_dump(raft);
 	/* Nothing visible is changed - no broadcast. */
 }
@@ -718,7 +788,7 @@ raft_sm_schedule_new_election_cb(struct ev_loop *loop, struct ev_timer *timer,
 static void
 raft_sm_wait_leader_dead(struct raft *raft)
 {
-	assert(!raft_ev_is_active(&raft->timer));
+	assert(!raft_ev_timer_is_active(&raft->timer));
 	assert(!raft->is_write_in_progress);
 	assert(raft->is_candidate);
 	assert(raft->state == RAFT_STATE_FOLLOWER);
@@ -730,7 +800,7 @@ raft_sm_wait_leader_dead(struct raft *raft)
 static void
 raft_sm_wait_leader_found(struct raft *raft)
 {
-	assert(!raft_ev_is_active(&raft->timer));
+	assert(!raft_ev_timer_is_active(&raft->timer));
 	assert(!raft->is_write_in_progress);
 	assert(raft->is_candidate);
 	assert(raft->state == RAFT_STATE_FOLLOWER);
@@ -742,7 +812,7 @@ raft_sm_wait_leader_found(struct raft *raft)
 static void
 raft_sm_wait_election_end(struct raft *raft)
 {
-	assert(!raft_ev_is_active(&raft->timer));
+	assert(!raft_ev_timer_is_active(&raft->timer));
 	assert(!raft->is_write_in_progress);
 	assert(raft->is_candidate);
 	assert(raft->state == RAFT_STATE_FOLLOWER ||
@@ -753,13 +823,18 @@ raft_sm_wait_election_end(struct raft *raft)
 				  raft_new_random_election_shift(raft);
 	raft_ev_timer_set(&raft->timer, election_timeout, election_timeout);
 	raft_ev_timer_start(raft_loop(), &raft->timer);
+	/*
+	 * Could start the waiting after a WAL write during which the split vote
+	 * could happen.
+	 */
+	raft_check_split_vote(raft);
 }
 
 static void
 raft_sm_start(struct raft *raft)
 {
 	say_info("RAFT: start state machine");
-	assert(!raft_ev_is_active(&raft->timer));
+	assert(!raft_ev_timer_is_active(&raft->timer));
 	assert(!raft->is_enabled);
 	assert(raft->state == RAFT_STATE_FOLLOWER);
 	raft->is_enabled = true;
@@ -931,21 +1006,23 @@ raft_restore(struct raft *raft)
 void
 raft_cfg_election_timeout(struct raft *raft, double timeout)
 {
-	if (timeout == raft->election_timeout)
+	double old_timeout = raft->election_timeout;
+	if (timeout == old_timeout)
 		return;
 
 	raft->election_timeout = timeout;
-	if (raft->vote != 0 && raft->leader == 0 && raft->is_candidate) {
-		assert(raft_ev_is_active(&raft->timer));
-		struct ev_loop *loop = raft_loop();
-		double timeout = raft_ev_timer_remaining(loop, &raft->timer) -
-				 raft->timer.at + raft->election_timeout;
-		if (timeout < 0)
-			timeout = 0;
-		raft_ev_timer_stop(loop, &raft->timer);
-		raft_ev_timer_set(&raft->timer, timeout, timeout);
-		raft_ev_timer_start(loop, &raft->timer);
-	}
+	if (raft->vote == 0 || raft->leader != 0 || !raft->is_candidate ||
+	    raft->is_write_in_progress)
+		return;
+
+	assert(raft_ev_timer_is_active(&raft->timer));
+	struct ev_loop *loop = raft_loop();
+	timeout += raft_ev_timer_remaining(loop, &raft->timer) - old_timeout;
+	if (timeout < 0)
+		timeout = 0;
+	raft_ev_timer_stop(loop, &raft->timer);
+	raft_ev_timer_set(&raft->timer, timeout, raft->election_timeout);
+	raft_ev_timer_start(loop, &raft->timer);
 }
 
 void
@@ -955,26 +1032,38 @@ raft_cfg_election_quorum(struct raft *raft, int election_quorum)
 	assert(election_quorum > 0);
 	raft->election_quorum = election_quorum;
 	if (raft->state == RAFT_STATE_CANDIDATE &&
-	    raft->vote_count >= raft->election_quorum)
+	    raft_vote_count(raft) >= raft->election_quorum)
 		raft_sm_become_leader(raft);
+	else
+		raft_check_split_vote(raft);
 }
 
 void
-raft_cfg_death_timeout(struct raft *raft, double death_timeout)
+raft_cfg_death_timeout(struct raft *raft, double timeout)
 {
-	raft->death_timeout = death_timeout;
-	if (raft->state == RAFT_STATE_FOLLOWER && raft->is_candidate &&
-	    raft->leader != 0) {
-		assert(raft_ev_is_active(&raft->timer));
-		struct ev_loop *loop = raft_loop();
-		double timeout = raft_ev_timer_remaining(loop, &raft->timer) -
-				 raft->timer.at + raft->death_timeout;
-		if (timeout < 0)
-			timeout = 0;
-		raft_ev_timer_stop(loop, &raft->timer);
-		raft_ev_timer_set(&raft->timer, timeout, timeout);
-		raft_ev_timer_start(loop, &raft->timer);
-	}
+	double old_timeout = raft->death_timeout;
+	if (timeout == old_timeout)
+		return;
+
+	raft->death_timeout = timeout;
+	if (raft->state != RAFT_STATE_FOLLOWER || !raft->is_candidate ||
+	    raft->leader == 0)
+		return;
+
+	assert(raft_ev_timer_is_active(&raft->timer));
+	struct ev_loop *loop = raft_loop();
+	timeout += raft_ev_timer_remaining(loop, &raft->timer) - old_timeout;
+	if (timeout < 0)
+		timeout = 0;
+	raft_ev_timer_stop(loop, &raft->timer);
+	raft_ev_timer_set(&raft->timer, timeout, raft->death_timeout);
+	raft_ev_timer_start(loop, &raft->timer);
+}
+
+void
+raft_cfg_max_shift(struct raft *raft, double shift)
+{
+	raft->max_shift = shift;
 }
 
 void
@@ -983,6 +1072,13 @@ raft_cfg_instance_id(struct raft *raft, uint32_t instance_id)
 	assert(raft->self == 0);
 	assert(instance_id != 0);
 	raft->self = instance_id;
+	/*
+	 * Couldn't do that reliably during recovery. Instance ID can change
+	 * more than once during join. Here instance ID is configured when it is
+	 * known forever and is safe to use.
+	 */
+	if (raft->volatile_vote != 0)
+		raft_add_vote(raft, instance_id, raft->volatile_vote);
 }
 
 void
@@ -991,6 +1087,13 @@ raft_cfg_vclock(struct raft *raft, const struct vclock *vclock)
 	assert(raft->vclock == NULL);
 	assert(vclock != NULL);
 	raft->vclock = vclock;
+}
+
+void
+raft_cfg_cluster_size(struct raft *raft, int size)
+{
+	raft->cluster_size = size;
+	raft_check_split_vote(raft);
 }
 
 void
@@ -1017,6 +1120,50 @@ raft_schedule_broadcast(struct raft *raft)
 	raft_schedule_async(raft);
 }
 
+static void
+raft_check_split_vote(struct raft *raft)
+{
+	/* When leader is known, there is no election. Thus no vote to split. */
+	if (raft->leader != 0)
+		return;
+	/* Not a candidate = can't trigger term bump anyway. */
+	if (!raft->is_candidate)
+		return;
+	/*
+	 * WAL write in progress means the state is changing. All is rechecked
+	 * when it is done.
+	 */
+	if (raft->is_write_in_progress)
+		return;
+	if (!raft_has_split_vote(raft))
+		return;
+	assert(raft_ev_timer_is_active(&raft->timer));
+	/*
+	 * Could be already detected before. The timeout would be updated by now
+	 * then.
+	 */
+	if (raft->timer.repeat < raft->election_timeout)
+		return;
+
+	assert(raft->state == RAFT_STATE_FOLLOWER ||
+	       raft->state == RAFT_STATE_CANDIDATE);
+	struct ev_loop *loop = raft_loop();
+	struct ev_timer *timer = &raft->timer;
+	double delay = raft_new_random_election_shift(raft);
+	/*
+	 * Could be too late to speed up anything - probably the term is almost
+	 * over anyway.
+	 */
+	double remaining = raft_ev_timer_remaining(loop, timer);
+	if (delay >= remaining)
+		delay = remaining;
+	say_info("RAFT: split vote is discovered - %s, new term in %lf sec",
+		 raft_scores_str(raft), delay);
+	raft_ev_timer_stop(loop, timer);
+	raft_ev_timer_set(timer, delay, delay);
+	raft_ev_timer_start(loop, timer);
+}
+
 void
 raft_create(struct raft *raft, const struct raft_vtab *vtab)
 {
@@ -1027,6 +1174,8 @@ raft_create(struct raft *raft, const struct raft_vtab *vtab)
 		.election_quorum = 1,
 		.election_timeout = 5,
 		.death_timeout = 5,
+		.max_shift = 0.1,
+		.cluster_size = VCLOCK_MAX,
 		.vtab = vtab,
 	};
 	raft_ev_timer_init(&raft->timer, raft_sm_schedule_new_election_cb,

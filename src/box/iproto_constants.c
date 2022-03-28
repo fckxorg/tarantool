@@ -147,6 +147,11 @@ const unsigned char iproto_key_type[IPROTO_KEY_MAX] =
 	/* 0x51 */	MP_ARRAY, /* IPROTO_ID_FILTER */
 	/* 0x52 */	MP_MAP, /* IPROTO_ERROR */
 	/* 0x53 */	MP_UINT, /* IPROTO_TERM */
+	/* 0x54 */	MP_UINT, /* IPROTO_VERSION */
+	/* 0x55 */	MP_ARRAY, /* IPROTO_FEATURES */
+	/* 0x56 */	MP_DOUBLE, /* IPROTO_TIMEOUT */
+	/* 0x57 */	MP_STR, /* IPROTO_EVENT_KEY */
+	/* 0x58 */	MP_NIL, /* IPROTO_EVENT_DATA (can be any) */
 	/* }}} */
 };
 
@@ -243,7 +248,7 @@ const char *iproto_key_strs[IPROTO_KEY_MAX] = {
 	NULL,               /* 0x2e */
 	NULL,               /* 0x2f */
 	"data",             /* 0x30 */
-	"error",            /* 0x31 */
+	"error_24",         /* 0x31 */
 	"metadata",         /* 0x32 */
 	"bind meta",        /* 0x33 */
 	"bind count",       /* 0x34 */
@@ -262,6 +267,27 @@ const char *iproto_key_strs[IPROTO_KEY_MAX] = {
 	"SQL bind",         /* 0x41 */
 	"SQL info",         /* 0x42 */
 	"stmt id",          /* 0x43 */
+	NULL,               /* 0x44 */
+	NULL,               /* 0x45 */
+	NULL,               /* 0x46 */
+	NULL,               /* 0x47 */
+	NULL,               /* 0x48 */
+	NULL,               /* 0x49 */
+	NULL,               /* 0x4a */
+	NULL,               /* 0x4b */
+	NULL,               /* 0x4c */
+	NULL,               /* 0x4d */
+	NULL,               /* 0x4e */
+	NULL,               /* 0x4f */
+	"replica anon",     /* 0x50 */
+	"id filter",        /* 0x51 */
+	"error",            /* 0x52 */
+	"term",             /* 0x53 */
+	"version",          /* 0x54 */
+	"features",         /* 0x55 */
+	"timeout",          /* 0x56 */
+	"event key",        /* 0x57 */
+	"event data",       /* 0x58 */
 };
 
 const char *vy_page_info_key_strs[VY_PAGE_INFO_KEY_MAX] = {

@@ -12,9 +12,10 @@ endif()
 include_directories(${PROJECT_SOURCE_DIR}/src)
 include_directories(${PROJECT_BINARY_DIR}/src)
 include_directories(${PROJECT_SOURCE_DIR}/src/box)
-include_directories(${CMAKE_SOURCE_DIR}/third_party)
+include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${ICU_INCLUDE_DIRS})
 include_directories(${CURL_INCLUDE_DIRS})
+include_directories(${EXTRA_CORE_INCLUDE_DIRS})
 
 add_library(unit STATIC unit.c)
 
@@ -24,6 +25,8 @@ add_executable(heap_iterator.test heap_iterator.c)
 target_link_libraries(heap_iterator.test unit)
 add_executable(stailq.test stailq.c)
 target_link_libraries(stailq.test unit)
+add_executable(uri_parser.test uri_parser.c unit.c)
+target_link_libraries(uri_parser.test uri unit)
 add_executable(uri.test uri.c unit.c)
 target_link_libraries(uri.test uri unit)
 add_executable(queue.test queue.c)
@@ -53,11 +56,15 @@ target_link_libraries(bitset_index.test bitset)
 add_executable(base64.test base64.c)
 target_link_libraries(base64.test misc unit)
 add_executable(uuid.test uuid.c core_test_utils.c)
-target_link_libraries(uuid.test uuid unit)
+target_link_libraries(uuid.test core unit)
 add_executable(random.test random.c core_test_utils.c)
 target_link_libraries(random.test core unit)
 add_executable(xmalloc.test xmalloc.c core_test_utils.c)
-target_link_libraries(xmalloc.test core unit)
+target_link_libraries(xmalloc.test unit)
+add_executable(datetime.test datetime.c)
+target_link_libraries(datetime.test tzcode core cdt unit)
+add_executable(error.test error.c core_test_utils.c)
+target_link_libraries(error.test unit core)
 
 add_executable(bps_tree.test bps_tree.cc)
 target_link_libraries(bps_tree.test small misc)
@@ -85,6 +92,8 @@ add_executable(fiber.test fiber.cc core_test_utils.c)
 target_link_libraries(fiber.test core unit)
 add_executable(fiber_stack.test fiber_stack.c core_test_utils.c)
 target_link_libraries(fiber_stack.test core unit)
+add_executable(func_cache.test func_cache.c box_test_utils.c)
+target_link_libraries(func_cache.test box unit)
 
 if (NOT ENABLE_GCOV)
     # This test is known to be broken with GCOV
@@ -134,6 +143,9 @@ if (ENABLE_BUNDLED_MSGPUCK)
     target_link_libraries(msgpack.test ${MSGPUCK_LIBRARIES})
 endif ()
 
+add_executable(mp_print_unknown_ext.test mp_print_unknown_ext.c box_test_utils.c)
+target_link_libraries(mp_print_unknown_ext.test unit box core)
+
 add_executable(scramble.test scramble.c core_test_utils.c)
 target_link_libraries(scramble.test scramble)
 
@@ -144,13 +156,13 @@ add_executable(crc32.test crc32.c)
 target_link_libraries(crc32.test unit crc32)
 
 add_executable(find_path.test find_path.c
-    ${CMAKE_SOURCE_DIR}/src/find_path.c
+    ${PROJECT_SOURCE_DIR}/src/find_path.c
 )
 
 add_executable(reflection_c.test reflection_c.c unit.c
-    ${CMAKE_SOURCE_DIR}/src/lib/core/reflection.c)
+    ${PROJECT_SOURCE_DIR}/src/lib/core/reflection.c)
 add_executable(reflection_cxx.test reflection_cxx.cc unit.c
-    ${CMAKE_SOURCE_DIR}/src/lib/core/reflection.c)
+    ${PROJECT_SOURCE_DIR}/src/lib/core/reflection.c)
 add_executable(csv.test csv.c)
 target_link_libraries(csv.test csv)
 
@@ -163,7 +175,7 @@ add_executable(histogram.test histogram.c core_test_utils.c)
 target_link_libraries(histogram.test stat unit)
 add_executable(ratelimit.test ratelimit.c)
 target_link_libraries(ratelimit.test unit)
-add_executable(luaT_tuple_new.test luaT_tuple_new.c)
+add_executable(luaT_tuple_new.test luaT_tuple_new.c box_test_utils.c)
 target_link_libraries(luaT_tuple_new.test unit box server core misc
     ${CURL_LIBRARIES} ${LIBYAML_LIBRARIES} ${READLINE_LIBRARIES}
     ${ICU_LIBRARIES} ${LUAJIT_LIBRARIES})
@@ -262,10 +274,10 @@ add_executable(swim_errinj.test swim_errinj.c swim_test_transport.c
                ${PROJECT_SOURCE_DIR}/src/version.c core_test_utils.c)
 target_link_libraries(swim_errinj.test unit fakesys swim)
 
-add_executable(merger.test merger.test.c)
+add_executable(merger.test merger.test.c box_test_utils.c)
 target_link_libraries(merger.test unit core box)
 
-add_executable(snap_quorum_delay.test snap_quorum_delay.cc)
+add_executable(snap_quorum_delay.test snap_quorum_delay.cc box_test_utils.c)
 target_link_libraries(snap_quorum_delay.test box core unit)
 
 add_executable(raft.test raft.c raft_test_utils.c core_test_utils.c)
@@ -278,5 +290,11 @@ add_executable(popen-child popen-child.c)
 add_executable(popen.test popen.c core_test_utils.c)
 target_link_libraries(popen.test misc unit core)
 
-add_executable(serializer.test serializer.c)
+add_executable(serializer.test serializer.c box_test_utils.c)
 target_link_libraries(serializer.test unit box ${LUAJIT_LIBRARIES})
+
+add_executable(watcher.test watcher.c)
+target_link_libraries(watcher.test unit box)
+
+add_executable(grp_alloc.test grp_alloc.c box_test_utils.c)
+target_link_libraries(grp_alloc.test unit)

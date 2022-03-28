@@ -33,6 +33,8 @@
 
 #include <stddef.h>
 
+struct uri_set;
+
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
@@ -52,57 +54,40 @@ enum {
 	 * processing stops until some new fibers are freed up.
 	 */
 	IPROTO_FIBER_POOL_SIZE_FACTOR = 5,
-	/** Maximum count of iproto threads */
+	/** Maximum count of iproto threads. */
 	IPROTO_THREADS_MAX = 1000,
+};
+
+struct iproto_stats {
+	/** Size of memory used for storing network buffers. */
+	size_t mem_used;
+	/** Number of active iproto connections. */
+	size_t connections;
+	/** Number of active iproto streams. */
+	size_t streams;
+	/** Number of iproto requests in flight. */
+	size_t requests;
+	/** Count of requests currently processing in tx thread. */
+	size_t requests_in_progress;
+	/** Count of requests currently pending in stream queue. */
+	size_t requests_in_stream_queue;
 };
 
 extern unsigned iproto_readahead;
 extern int iproto_threads_count;
 
 /**
- * Return size of memory used for storing network buffers.
+ * Return total iproto statistic.
  */
-size_t
-iproto_mem_used(void);
+void
+iproto_stats_get(struct iproto_stats *stats);
 
 /**
- * Return the number of active iproto connections.
+ * Return total iproto statistic for
+ * the thread with the given id.
  */
-size_t
-iproto_connection_count(void);
-
-/**
- * Return the number of active iproto connections
- * for the thread with the given id.
- */
-size_t
-iproto_thread_connection_count(int thread_id);
-
-/**
- * Return the number of active iproto streams.
- */
-size_t
-iproto_stream_count(void);
-
-/**
- * Return the number of active iproto streams
- * for the thread with the given id.
- */
-size_t
-iproto_thread_stream_count(int thread_id);
-
-/**
- * Return the number of iproto requests in flight.
- */
-size_t
-iproto_request_count(void);
-
-/**
- * Return the number of iproto requests in flight
- * for the thread with the given id.
- */
-size_t
-iproto_thread_request_count(int thread_id);
+void
+iproto_thread_stats_get(struct iproto_stats *stats, int thread_id);
 
 /**
  * Reset network statistics.
@@ -111,11 +96,18 @@ void
 iproto_reset_stat(void);
 
 /**
- * String representation of the address served by
- * iproto. To be shown in box.info.
+ * Return count of the addresses currently served by iproto.
+ */
+int
+iproto_addr_count(void);
+
+/**
+ * Return representation of the address served by iproto by
+ * it's @a idx. @a buf should have at least SERVICE_NAME_MAXLEN
+ * size.
  */
 const char *
-iproto_bound_address(char *buf);
+iproto_addr_str(char *buf, int idx);
 
 int
 iproto_rmean_foreach(void *cb, void *cb_ctx);
@@ -134,7 +126,7 @@ void
 iproto_init(int threads_count);
 
 int
-iproto_listen(const char *uri);
+iproto_listen(const struct uri_set *uri_set);
 
 void
 iproto_set_msg_max(int iproto_msg_max);

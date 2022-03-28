@@ -82,13 +82,13 @@ new_udata(struct lua_State *L, const char *uname, void *ptr)
 static void *
 cache_find(const char *str, size_t len)
 {
-	mh_int_t e = mh_strnptr_find_inp(func_hash, str, len);
+	mh_int_t e = mh_strnptr_find_str(func_hash, str, len);
 	if (e == mh_end(func_hash))
 		return NULL;
 	return mh_strnptr_node(func_hash, e)->val;
 }
 
-static int
+static void
 cache_put(struct box_module_func *cf)
 {
 	const struct mh_strnptr_node_t nd = {
@@ -100,26 +100,18 @@ cache_put(struct box_module_func *cf)
 
 	struct mh_strnptr_node_t prev;
 	struct mh_strnptr_node_t *prev_ptr = &prev;
-
-	mh_int_t e = mh_strnptr_put(func_hash, &nd, &prev_ptr, NULL);
-	if (e == mh_end(func_hash)) {
-		diag_set(OutOfMemory, sizeof(nd), "malloc",
-			 "box.lib: hash node");
-		return -1;
-	}
-
+	mh_strnptr_put(func_hash, &nd, &prev_ptr, NULL);
 	/*
 	 * Just to make sure we haven't replaced something,
 	 * the entries must be explicitly deleted.
 	 */
 	assert(prev_ptr == NULL);
-	return 0;
 }
 
 static void
 cache_del(struct box_module_func *cf)
 {
-	mh_int_t e = mh_strnptr_find_inp(func_hash, cf->key, cf->len);
+	mh_int_t e = mh_strnptr_find_str(func_hash, cf->key, cf->len);
 	if (e != mh_end(func_hash))
 		mh_strnptr_del(func_hash, e, NULL);
 }
@@ -340,12 +332,7 @@ box_module_func_new(struct module *m, const char *key, size_t len, size_t sym_le
 		return NULL;
 	}
 
-	if (cache_put(cf) != 0) {
-		module_func_unload(&cf->base);
-		box_module_func_delete(cf);
-		return NULL;
-	}
-
+	cache_put(cf);
 	/*
 	 * Each new function depends on module presence.
 	 * Module will reside even if been unload
@@ -586,8 +573,6 @@ void
 box_lua_lib_init(struct lua_State *L)
 {
 	func_hash = mh_strnptr_new();
-	if (func_hash == NULL)
-		panic("box.lib: Can't allocate func hash table");
 
 	static const struct luaL_Reg top_methods[] = {
 		{ "load",		lbox_module_load	},

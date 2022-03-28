@@ -79,8 +79,13 @@ local tuple_encode = function(tmpbuf, obj)
     elseif is_tuple(obj) then
         encode_r(tmpbuf, obj, 1)
     elseif type(obj) == "table" then
-        encode_array(tmpbuf, #obj)
-        for i = 1, #obj, 1 do
+        local obj_size = #obj
+        if obj_size == 0 and not rawequal(next(obj), nil) then
+            -- dictionary cannot represent a tuple
+            return box.error(box.error.TUPLE_NOT_ARRAY)
+        end
+        encode_array(tmpbuf, obj_size)
+        for i = 1, obj_size, 1 do
             encode_r(tmpbuf, obj[i], 1)
         end
     else
@@ -98,7 +103,14 @@ local tuple_bless = function(tuple)
     -- overflow checked by tuple_bless() in C
     builtin.box_tuple_ref(tuple)
     -- must never fail:
-    return ffi.gc(ffi.cast(const_tuple_ref_t, tuple), tuple_gc)
+    -- XXX: If we use tail call (instead of creating a new frame
+    -- for a call just use the top one) here, then JIT tries to
+    -- compile return from `ffi.gc()` to the frame below. This
+    -- aborts the trace recording with the error "NYI: return to
+    -- lower frame". So avoid tail call and use additional stack
+    -- slots (for the local variable and the frame).
+    local tuple_ref = ffi.gc(ffi.cast(const_tuple_ref_t, tuple), tuple_gc)
+    return tuple_ref
 end
 
 local tuple_check = function(tuple, usage)

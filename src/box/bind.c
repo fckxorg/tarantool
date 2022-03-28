@@ -34,6 +34,9 @@
 #include "sql/sqlInt.h"
 #include "sql/sqlLimit.h"
 #include "sql/vdbe.h"
+#include "mp_datetime.h"
+#include "mp_decimal.h"
+#include "mp_uuid.h"
 
 const char *
 sql_bind_name(const struct sql_bind *bind)
@@ -99,19 +102,45 @@ sql_bind_decode(struct sql_bind *bind, int i, const char **packet)
 	case MP_BIN:
 		bind->s = mp_decode_bin(packet, &bind->bytes);
 		break;
-	case MP_EXT:
+	case MP_EXT: {
+		int8_t ext_type;
+		uint32_t size = mp_decode_extl(packet, &ext_type);
+		switch (ext_type) {
+		case MP_UUID:
+			if (uuid_unpack(packet, size, &bind->uuid) == NULL) {
+				diag_set(ClientError, ER_INVALID_MSGPACK,
+					 "Invalid MP_UUID MsgPack format");
+				return -1;
+			}
+			break;
+		case MP_DECIMAL:
+			if (decimal_unpack(packet, size, &bind->dec) == NULL) {
+				diag_set(ClientError, ER_INVALID_MSGPACK,
+					 "Invalid MP_DECIMAL MsgPack format");
+				return -1;
+			}
+			break;
+		case MP_DATETIME:
+			if (datetime_unpack(packet, size, &bind->dt) == NULL) {
+				diag_set(ClientError, ER_INVALID_MSGPACK,
+					 "Invalid MP_DATETIME MsgPack format");
+				return -1;
+			}
+			break;
+		default:
+			diag_set(ClientError, ER_SQL_BIND_TYPE, "USERDATA",
+				 sql_bind_name(bind));
+			return -1;
+		}
+		bind->ext_type = ext_type;
+		break;
+	}
+	case MP_ARRAY:
+	case MP_MAP:
 		bind->s = *packet;
 		mp_next(packet);
 		bind->bytes = *packet - bind->s;
 		break;
-	case MP_ARRAY:
-		diag_set(ClientError, ER_SQL_BIND_TYPE, "ARRAY",
-			 sql_bind_name(bind));
-		return -1;
-	case MP_MAP:
-		diag_set(ClientError, ER_SQL_BIND_TYPE, "MAP",
-			 sql_bind_name(bind));
-		return -1;
 	default:
 		unreachable();
 	}
@@ -185,17 +214,22 @@ sql_bind_column(struct sql_stmt *stmt, const struct sql_bind *p,
 		 * there is no need to copy the packet and we can
 		 * use SQL_STATIC.
 		 */
-		return sql_bind_text64(stmt, pos, p->s, p->bytes, SQL_STATIC);
+		return sql_bind_str_static(stmt, pos, p->s, p->bytes);
 	case MP_NIL:
 		return sql_bind_null(stmt, pos);
 	case MP_BIN:
-		return sql_bind_blob64(stmt, pos, (const void *) p->s, p->bytes,
-				       SQL_STATIC);
+		return sql_bind_bin_static(stmt, pos, p->s, p->bytes);
+	case MP_ARRAY:
+		return sql_bind_array_static(stmt, pos, p->s, p->bytes);
+	case MP_MAP:
+		return sql_bind_map_static(stmt, pos, p->s, p->bytes);
 	case MP_EXT:
-		assert(p->ext_type == MP_UUID || p->ext_type == MP_DECIMAL);
 		if (p->ext_type == MP_UUID)
 			return sql_bind_uuid(stmt, pos, &p->uuid);
-		return sql_bind_dec(stmt, pos, &p->dec);
+		else if (p->ext_type == MP_DECIMAL)
+			return sql_bind_dec(stmt, pos, &p->dec);
+		assert(p->ext_type == MP_DATETIME);
+		return sql_bind_datetime(stmt, pos, &p->dt);
 	default:
 		unreachable();
 	}

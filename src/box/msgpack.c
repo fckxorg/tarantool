@@ -1,5 +1,5 @@
 /*
- * Copyright 2020, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2020-2021, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -33,13 +33,15 @@
 
 #include "mp_extension_types.h"
 #include "mp_decimal.h"
-#include "uuid/mp_uuid.h"
 #include "mp_error.h"
+#include "mp_uuid.h"
+#include "mp_datetime.h"
+#include "mp_compression.h"
 
 static int
 msgpack_fprint_ext(FILE *file, const char **data, int depth)
 {
-	const char **orig = data;
+	const char *orig = *data;
 	int8_t type;
 	uint32_t len = mp_decode_extl(data, &type);
 	switch(type) {
@@ -47,17 +49,22 @@ msgpack_fprint_ext(FILE *file, const char **data, int depth)
 		return mp_fprint_decimal(file, data, len);
 	case MP_UUID:
 		return mp_fprint_uuid(file, data, len);
+	case MP_DATETIME:
+		return mp_fprint_datetime(file, data, len);
 	case MP_ERROR:
 		return mp_fprint_error(file, data, depth);
+	case MP_COMPRESSION:
+		return mp_fprint_compression(file, data, len);
 	default:
-		return mp_fprint_ext_default(file, orig, depth);
+		*data = orig;
+		return mp_fprint_ext_default(file, data, depth);
 	}
 }
 
 static int
 msgpack_snprint_ext(char *buf, int size, const char **data, int depth)
 {
-	const char **orig = data;
+	const char *orig = *data;
 	int8_t type;
 	uint32_t len = mp_decode_extl(data, &type);
 	switch(type) {
@@ -65,10 +72,15 @@ msgpack_snprint_ext(char *buf, int size, const char **data, int depth)
 		return mp_snprint_decimal(buf, size, data, len);
 	case MP_UUID:
 		return mp_snprint_uuid(buf, size, data, len);
+	case MP_DATETIME:
+		return mp_snprint_datetime(buf, size, data, len);
 	case MP_ERROR:
 		return mp_snprint_error(buf, size, data, depth);
+	case MP_COMPRESSION:
+		return mp_snprint_compression(buf, size, data, len);
 	default:
-		return mp_snprint_ext_default(buf, size, orig, depth);
+		*data = orig;
+		return mp_snprint_ext_default(buf, size, data, depth);
 	}
 }
 

@@ -120,7 +120,7 @@ IPROTO_REQUEST_TYPE       = 0x00
 IPROTO_SYNC               = 0x01
 IPROTO_AUTH               = 7
 IPROTO_STREAM_ID          = 0x0a
-next_request_id           = 9
+next_request_id           = 10
 test_run:cmd("setopt delimiter ';'")
 header = msgpack.encode({
     [IPROTO_REQUEST_TYPE] = IPROTO_AUTH,
@@ -129,9 +129,7 @@ header = msgpack.encode({
 });
 body = msgpack.encode({nil});
 size = msgpack.encode(header:len() + body:len());
-conn._transport.perform_request(nil, nil, false, net_box._method.inject,
-                                nil, nil, nil, nil,
-                                size .. header .. body);
+conn:_request(net_box._method.inject, nil, nil, nil, size .. header .. body);
 test_run:cmd("setopt delimiter ''");
 conn:close()
 test_run:cmd("stop server test")

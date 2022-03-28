@@ -451,8 +451,8 @@ field_def_decode(struct field_def *field, const char **data,
 	}
 	if (is_action_missing) {
 		field->nullable_action = field->is_nullable ?
-					 ON_CONFLICT_ACTION_NONE
-							    : ON_CONFLICT_ACTION_DEFAULT;
+					 ON_CONFLICT_ACTION_NONE :
+					 ON_CONFLICT_ACTION_DEFAULT;
 	}
 	if (field->name == NULL) {
 		diag_set(ClientError, errcode, tt_cstr(space_name, name_len),
@@ -499,6 +499,12 @@ field_def_decode(struct field_def *field, const char **data,
 		diag_set(ClientError, errcode, tt_cstr(space_name, name_len),
 			 tt_sprintf("collation is reasonable only for "
 				    "string, scalar and any fields"));
+		return -1;
+	}
+	if (field->compression_type == compression_type_MAX) {
+		diag_set(ClientError, errcode, tt_cstr(space_name, name_len),
+			 tt_sprintf("field %d has unknown compression type",
+				    fieldno + TUPLE_INDEX_BASE));
 		return -1;
 	}
 
@@ -950,10 +956,6 @@ public:
 	AlterSpaceLock(struct alter_space *alter) {
 		if (registry == NULL) {
 			registry = mh_i32_new();
-			if (registry == NULL) {
-				tnt_raise(OutOfMemory, 0, "mh_i32_new",
-					  "alter lock registry");
-			}
 		}
 		space_id = alter->old_space->def->id;
 		if (mh_i32_find(registry, space_id, NULL) != mh_end(registry)) {
@@ -961,9 +963,7 @@ public:
 				  space_name(alter->old_space),
 				  "the space is already being modified");
 		}
-		mh_int_t k = mh_i32_put(registry, &space_id, NULL, NULL);
-		if (k == mh_end(registry))
-			tnt_raise(OutOfMemory, 0, "mh_i32_put", "alter lock");
+		mh_i32_put(registry, &space_id, NULL, NULL);
 	}
 	~AlterSpaceLock() {
 		mh_int_t k = mh_i32_find(registry, space_id, NULL);
@@ -1155,6 +1155,7 @@ alter_space_do(struct txn_stmt *stmt, struct alter_space *alter)
 	/* Rebuild index maps once for all indexes. */
 	space_fill_index_map(alter->old_space);
 	space_fill_index_map(alter->new_space);
+
 	/*
 	 * Don't forget about space triggers, foreign keys and
 	 * constraints.
@@ -1213,6 +1214,13 @@ CheckSpaceFormat::prepare(struct alter_space *alter)
 	struct tuple_format *old_format = old_space->format;
 	if (old_format != NULL) {
 		assert(new_format != NULL);
+		for (uint32_t i = 0; i < old_space->index_count; i++) {
+			struct key_def *key_def =
+				alter->old_space->index[i]->def->key_def;
+			if (!tuple_format_is_compatible_with_key_def(new_format,
+								     key_def))
+				diag_raise();
+		}
 		if (!tuple_format1_can_store_format2_tuples(new_format,
 							    old_format))
 			space_check_format_with_yield(old_space, new_format);
@@ -1485,6 +1493,10 @@ CreateIndex::prepare(struct alter_space *alter)
 	new_index = space_index(alter->new_space, new_index_def->iid);
 	assert(new_index != NULL);
 
+	struct key_def *key_def = new_index->def->key_def;
+	if (!tuple_format_is_compatible_with_key_def(alter->new_space->format,
+						     key_def))
+		diag_raise();
 	if (new_index_def->iid == 0) {
 		/*
 		 * Adding a primary key: bring the space
@@ -1834,10 +1846,7 @@ space_insert_constraint_id(struct space *space, enum constraint_type type,
 	struct constraint_id *id = constraint_id_new(type, name);
 	if (id == NULL)
 		return -1;
-	if (space_add_constraint_id(space, id) != 0) {
-		constraint_id_delete(id);
-		return -1;
-	}
+	space_add_constraint_id(space, id);
 	return 0;
 }
 
@@ -1878,9 +1887,7 @@ CreateConstraintID::prepare(struct alter_space *alter)
 void
 CreateConstraintID::alter(struct alter_space *alter)
 {
-	/* Alter() can't fail, so can't just throw an error. */
-	if (space_add_constraint_id(alter->old_space, new_id) != 0)
-		panic("Can't add a new constraint id, out of memory");
+	space_add_constraint_id(alter->old_space, new_id);
 }
 
 void
@@ -1939,10 +1946,7 @@ DropConstraintID::commit(struct alter_space *alter, int64_t signature)
 void
 DropConstraintID::rollback(struct alter_space *alter)
 {
-	if (space_add_constraint_id(alter->new_space, old_id) != 0) {
-		panic("Can't recover after constraint drop rollback (out of "
-		      "memory)");
-	}
+	space_add_constraint_id(alter->new_space, old_id);
 }
 
 /* }}} */
@@ -2376,6 +2380,17 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 				  "the space has check constraints");
 			return -1;
 		}
+		/* Check whether old_space is used somewhere. */
+		enum space_cache_holder_type pinned_type;
+		if (space_cache_is_pinned(old_space, &pinned_type)) {
+			const char *type_str =
+				space_cache_holder_type_strs[pinned_type];
+			diag_set(ClientError, ER_DROP_SPACE,
+				 space_name(old_space),
+				 tt_sprintf("space is referenced by %s",
+					    type_str));
+			return -1;
+		}
 		/**
 		 * The space must be deleted from the space
 		 * cache right away to achieve linearisable
@@ -2647,6 +2662,20 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 				  space_name(old_space),
 				  "can not drop primary key while "
 				  "space sequence exists");
+			return -1;
+		}
+
+		/*
+		 * Must not truncate pinned space.
+		 */
+		enum space_cache_holder_type pinned_type;
+		if (space_cache_is_pinned(old_space, &pinned_type)) {
+			const char *type_str =
+				space_cache_holder_type_strs[pinned_type];
+			diag_set(ClientError, ER_ALTER_SPACE,
+				 space_name(old_space),
+				 tt_sprintf("space is referenced by %s",
+					    type_str));
 			return -1;
 		}
 	}
@@ -2928,6 +2957,11 @@ on_replace_dd_truncate(struct trigger * /* trigger */, void *event)
 	if (space_is_temporary(old_space) ||
 	    space_group_id(old_space) == GROUP_LOCAL) {
 		stmt->row->group_id = GROUP_LOCAL;
+		/*
+		 * The trigger is invoked after txn->n_local_rows
+		 * is counted, so don't forget to update it here.
+		 */
+		++txn->n_local_rows;
 	}
 
 	try {
@@ -3469,6 +3503,13 @@ func_def_new_from_tuple(struct tuple *tuple)
 				  def->name, "invalid aggregate value");
 			return NULL;
 		}
+		if (def->aggregate == FUNC_AGGREGATE_GROUP &&
+		    def->exports.lua) {
+			diag_set(ClientError, ER_CREATE_FUNCTION, def->name,
+				 "aggregate function can only be accessed in "
+				 "SQL");
+			return NULL;
+		}
 		const char *param_list = tuple_field_with_type(tuple,
 			BOX_FUNC_FIELD_PARAM_LIST, MP_ARRAY);
 		if (param_list == NULL)
@@ -3490,6 +3531,12 @@ func_def_new_from_tuple(struct tuple *tuple)
 					  def->name, "invalid argument type");
 				return NULL;
 			}
+		}
+		if (def->aggregate == FUNC_AGGREGATE_GROUP && argc == 0) {
+			diag_set(ClientError, ER_CREATE_FUNCTION, def->name,
+				 "aggregate function must have at least one "
+				 "argument");
+			return NULL;
 		}
 		def->param_count = argc;
 		const char *opts = tuple_field(tuple, BOX_FUNC_FIELD_OPTS);
@@ -3611,6 +3658,17 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 			diag_set(ClientError, ER_DROP_FUNCTION,
 				  (unsigned) old_func->def->uid,
 				  "function has references");
+			return -1;
+		}
+		/* Check whether old_func is used somewhere. */
+		enum func_holder_type pinned_type;
+		if (func_is_pinned(old_func, &pinned_type)) {
+			const char *type_str =
+				func_cache_holder_type_strs[pinned_type];
+			diag_set(ClientError, ER_DROP_FUNCTION,
+				 (unsigned int)old_func->def->uid,
+				 tt_sprintf("function is referenced by %s",
+					    type_str));
 			return -1;
 		}
 		struct trigger *on_commit =
@@ -3891,6 +3949,7 @@ priv_def_create_from_tuple(struct priv_def *priv, struct tuple *tuple)
 	if (object_type == NULL)
 		return -1;
 	priv->object_type = schema_object_type(object_type);
+	assert(priv->object_type < schema_object_type_MAX);
 
 	const char *data = tuple_field(tuple, BOX_PRIV_FIELD_OBJECT_ID);
 	if (data == NULL) {
@@ -3954,6 +4013,8 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 		return -1;
 	}
 	const char *name = schema_find_name(priv->object_type, priv->object_id);
+	if (name == NULL)
+		return -1;
 	if (access_check_ddl(name, priv->object_id, grantor->def->uid,
 			     priv->object_type, priv_type) != 0)
 		return -1;
@@ -4072,7 +4133,7 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 		/* Only admin may grant privileges on an entire entity. */
 		if (grantor->def->uid != ADMIN) {
 			diag_set(AccessDeniedError, priv_name(priv_type),
-				  schema_object_name(priv->object_type), name,
+				 schema_entity_name(priv->object_type), name,
 				  grantor->def->name);
 			return -1;
 		}

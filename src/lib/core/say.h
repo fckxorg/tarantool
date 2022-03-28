@@ -191,10 +191,22 @@ log_create(struct log *log, const char *init_str, int nonblock);
 void
 log_destroy(struct log *log);
 
-/** Perform log write. */
+/** A utility function to handle va_list from different varargs functions. */
 int
+log_vsay(struct log *log, int level, const char *filename, int line,
+	 const char *error, const char *format, va_list ap);
+
+/** Perform log write. */
+static inline int
 log_say(struct log *log, int level, const char *filename,
-	int line, const char *error, const char *format, ...);
+	int line, const char *error, const char *format, ...)
+{
+	va_list ap;
+	va_start(ap, format);
+	int total = log_vsay(log, level, filename, line, error, format, ap);
+	va_end(ap);
+	return total;
+}
 
 /**
  * Default logger type info.
@@ -361,11 +373,11 @@ enum {
  * messages are suppressed. It uses ev_monotonic_now() as a time
  * source.
  */
-#define say_ratelimit_check(rl) ({					\
+#define say_ratelimit_check(rl, level) ({				\
 	int suppressed = 0;						\
 	bool ret = ratelimit_check((rl), ev_monotonic_now(loop()),	\
 				   &suppressed);			\
-	if (suppressed > 0)						\
+	if ((level) >= S_WARN && suppressed > 0)			\
 		say_warn("%d messages suppressed", suppressed);		\
 	ret;								\
 })
@@ -380,12 +392,18 @@ enum {
 	static struct ratelimit rl =					\
 		RATELIMIT_INITIALIZER(SAY_RATELIMIT_INTERVAL,		\
 				      SAY_RATELIMIT_BURST);		\
-	if (say_ratelimit_check(&rl))					\
+	if (say_ratelimit_check(&rl, level))				\
 		say(level, error, format, ##__VA_ARGS__);		\
 })
 
+#define say_crit_ratelimited(format, ...) \
+        say_ratelimited(S_CRIT, NULL, format, ##__VA_ARGS__)
+
 #define say_warn_ratelimited(format, ...) \
 	say_ratelimited(S_WARN, NULL, format, ##__VA_ARGS__)
+
+#define say_info_ratelimited(format, ...) \
+        say_ratelimited(S_INFO, NULL, format, ##__VA_ARGS__)
 
 /**
  * Format and print a message to Tarantool log file.

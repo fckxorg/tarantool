@@ -35,6 +35,8 @@
 #include "sql.h"
 #include "msgpuck.h"
 #include "tt_static.h"
+#include "tuple_constraint_def.h"
+#include "tuple_format.h"
 
 const struct space_opts space_opts_default = {
 	/* .group_id = */ 0,
@@ -42,15 +44,39 @@ const struct space_opts space_opts_default = {
 	/* .is_ephemeral = */ false,
 	/* .view = */ false,
 	/* .is_sync = */ false,
+	/* .defer_deletes = */ false,
 	/* .sql        = */ NULL,
+	/* .constraint_def = */ NULL,
+	/* .constraint_count = */ 0,
 };
+
+/**
+ * Callback to parse a value with 'constraint' key in msgpack space opts
+ * definition. See function definition below.
+ */
+static int
+space_opts_parse_constraint(const char **data, void *vopts,
+			    struct region *region,
+			    uint32_t errcode, uint32_t field_no);
+
+/**
+ * Callback to parse a value with 'foreign_key' key in msgpack space opts
+ * definition. See function definition below.
+ */
+static int
+space_opts_parse_foreign_key(const char **data, void *vopts,
+			     struct region *region,
+			     uint32_t errcode, uint32_t field_no);
 
 const struct opt_def space_opts_reg[] = {
 	OPT_DEF("group_id", OPT_UINT32, struct space_opts, group_id),
 	OPT_DEF("temporary", OPT_BOOL, struct space_opts, is_temporary),
 	OPT_DEF("view", OPT_BOOL, struct space_opts, is_view),
 	OPT_DEF("is_sync", OPT_BOOL, struct space_opts, is_sync),
+	OPT_DEF("defer_deletes", OPT_BOOL, struct space_opts, defer_deletes),
 	OPT_DEF("sql", OPT_STRPTR, struct space_opts, sql),
+	OPT_DEF_CUSTOM("constraint", space_opts_parse_constraint),
+	OPT_DEF_CUSTOM("foreign_key", space_opts_parse_foreign_key),
 	OPT_DEF_LEGACY("checks"),
 	OPT_END,
 };
@@ -81,6 +107,19 @@ space_def_sizeof(uint32_t name_len, const struct field_def *fields,
 	return *def_expr_offset + def_exprs_size;
 }
 
+struct tuple_format *
+space_tuple_format_new(struct tuple_format_vtab *vtab, void *engine,
+		       struct key_def *const *keys, uint16_t key_count,
+		       const struct space_def *def)
+{
+	return tuple_format_new(vtab, engine, keys, key_count,
+				def->fields, def->field_count,
+				def->exact_field_count, def->dict,
+				def->opts.is_temporary, def->opts.is_ephemeral,
+				def->opts.constraint_def,
+				def->opts.constraint_count);
+}
+
 /**
  * Initialize def->opts with opts duplicate.
  * @param def  Def to initialize.
@@ -100,6 +139,10 @@ space_def_dup_opts(struct space_def *def, const struct space_opts *opts)
 			return -1;
 		}
 	}
+	def->opts.constraint_count = opts->constraint_count;
+	def->opts.constraint_def =
+		tuple_constraint_def_array_dup(opts->constraint_def,
+					       opts->constraint_count);
 	return 0;
 }
 
@@ -144,6 +187,12 @@ space_def_dup(const struct space_def *src)
 				expr_pos += sql_expr_sizeof(e, 0);
 				ret->fields[i].default_value_expr = e;
 			}
+			ret->fields[i].constraint_count =
+				src->fields[i].constraint_count;
+			ret->fields[i].constraint_def =
+				tuple_constraint_def_array_dup(
+					src->fields[i].constraint_def,
+					src->fields[i].constraint_count);
 		}
 	}
 	tuple_dictionary_ref(ret->dict);
@@ -226,6 +275,11 @@ space_def_new(uint32_t id, uint32_t uid, uint32_t exact_field_count,
 				expr_pos += sql_expr_sizeof(e, 0);
 				def->fields[i].default_value_expr = e;
 			}
+
+			def->fields[i].constraint_def =
+				tuple_constraint_def_array_dup(
+					fields[i].constraint_def,
+					fields[i].constraint_count);
 		}
 	}
 	if (space_def_dup_opts(def, opts) != 0) {
@@ -264,6 +318,9 @@ space_def_destroy_fields(struct field_def *fields, uint32_t field_count,
 			sql_expr_delete(sql_get(), fields[i].default_value_expr,
 					extern_alloc);
 		}
+		if (extern_alloc)
+			free(fields[i].constraint_def);
+		TRASH(&fields[i]);
 	}
 }
 
@@ -281,5 +338,51 @@ void
 space_opts_destroy(struct space_opts *opts)
 {
 	free(opts->sql);
+	free(opts->constraint_def);
 	TRASH(opts);
+}
+
+/**
+ * Parse constraint array from msgpack.
+ * Used as callback to parse a value with 'constraint' key in space options.
+ * Move @a data msgpack pointer to the end of msgpack value.
+ * By convention @a opts must point to corresponding struct space_opts.
+ * Allocate a temporary constraint array on @a region and set pointer to it
+ *  as field_def->constraint, also setting field_def->constraint_count.
+ * Return 0 on success or -1 on error (diag is set to @a errcode with
+ *  reference to field by @a field_no).
+ */
+int
+space_opts_parse_constraint(const char **data, void *vopts,
+			    struct region *region,
+			    uint32_t errcode, uint32_t field_no)
+{
+	/* Expected normal form of constraints: {name1=func1, name2=func2..}. */
+	struct space_opts *opts = (struct space_opts *)vopts;
+	return tuple_constraint_def_decode(data, &opts->constraint_def,
+					   &opts->constraint_count, region,
+					   errcode, field_no);
+}
+
+/**
+ * Parse foreign key array from msgpack.
+ * Used as callback to parse a value with 'foreign_key' key in space options.
+ * Move @a data msgpack pointer to the end of msgpack value.
+ * By convention @a opts must point to corresponding struct space_opts.
+ * Allocate a temporary constraint array on @a region and set pointer to it
+ *  as field_def->constraint, also setting field_def->constraint_count.
+ * Return 0 on success or -1 on error (diag is set to @a errcode with
+ *  reference to field by @a field_no).
+ */
+int
+space_opts_parse_foreign_key(const char **data, void *vopts,
+			     struct region *region,
+			     uint32_t errcode, uint32_t field_no)
+{
+	/* Expected normal form of constraints: {name1={space=.., field=..}.. */
+	struct space_opts *opts = (struct space_opts *)vopts;
+	return tuple_constraint_def_decode_fkey(data, &opts->constraint_def,
+						&opts->constraint_count,
+						region, errcode, field_no,
+						true);
 }

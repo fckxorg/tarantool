@@ -97,8 +97,6 @@ runtime_tuple_new(struct tuple_format *format, const char *data, const char *end
 static struct tuple_format_vtab tuple_format_runtime_vtab = {
 	runtime_tuple_delete,
 	runtime_tuple_new,
-	NULL,
-	NULL,
 };
 
 static struct tuple *
@@ -241,10 +239,7 @@ tuple_ref_set_uploaded_refs(struct tuple *tuple, uint32_t refs)
 	struct tuple_uploaded_refs put;
 	put.tuple = tuple;
 	put.refs = refs;
-	mh_int_t pos = mh_tuple_uploaded_refs_put(tuple_uploaded_refs, &put,
-						  NULL, 0);
-	if (pos == mh_end(tuple_uploaded_refs))
-		panic("Failed to allocate storage for tuple refs");
+	mh_tuple_uploaded_refs_put(tuple_uploaded_refs, &put, NULL, 0);
 }
 
 /** Convenient helper for hash table. */
@@ -292,16 +287,14 @@ tuple_bigref_tuple_count()
 int
 tuple_init(field_name_hash_f hash)
 {
-	if (tuple_format_init() != 0)
-		return -1;
-
+	tuple_format_init();
 	field_name_hash = hash;
 	/*
 	 * Create a format for runtime tuples
 	 */
-	tuple_format_runtime = tuple_format_new(&tuple_format_runtime_vtab, NULL,
-						NULL, 0, NULL, 0, 0, NULL, false,
-						false);
+	tuple_format_runtime =
+		simple_tuple_format_new(&tuple_format_runtime_vtab,
+					NULL, NULL, 0);
 	if (tuple_format_runtime == NULL)
 		return -1;
 
@@ -320,9 +313,7 @@ tuple_init(field_name_hash_f hash)
 
 	tuple_uploaded_refs = mh_tuple_uploaded_refs_new();
 
-	if (coll_id_cache_init() != 0)
-		return -1;
-
+	coll_id_cache_init();
 	return 0;
 }
 
@@ -573,9 +564,8 @@ box_tuple_format_t *
 box_tuple_format_new(struct key_def **keys, uint16_t key_count)
 {
 	box_tuple_format_t *format =
-		tuple_format_new(&tuple_format_runtime_vtab, NULL,
-				 keys, key_count, NULL, 0, 0, NULL, false,
-				 false);
+		simple_tuple_format_new(&tuple_format_runtime_vtab,
+					NULL, keys, key_count);
 	if (format != NULL)
 		tuple_format_ref(format);
 	return format;

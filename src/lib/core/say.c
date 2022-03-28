@@ -77,11 +77,6 @@ say_format_syslog(struct log *log, char *buf, int len, int level,
 		  const char *filename, int line, const char *error,
 		  const char *format, va_list ap);
 
-/** A utility function to handle va_list from different varargs functions. */
-static inline int
-log_vsay(struct log *log, int level, const char *filename, int line,
-	 const char *error, const char *format, va_list ap);
-
 /** Default logger used before logging subsystem is initialized. */
 static struct log log_boot = {
 	.fd = STDERR_FILENO,
@@ -483,7 +478,7 @@ syslog_connect_unix(const char *path)
 {
 	int fd = socket(PF_UNIX, SOCK_DGRAM, 0);
 	if (fd < 0) {
-		diag_set(SystemError, strerror(errno));
+		diag_set(SystemError, "socket");
 		return -1;
 	}
 	struct sockaddr_un un;
@@ -491,7 +486,7 @@ syslog_connect_unix(const char *path)
 	snprintf(un.sun_path, sizeof(un.sun_path), "%s", path);
 	un.sun_family = AF_UNIX;
 	if (connect(fd, (struct sockaddr *) &un, sizeof(un)) != 0) {
-		diag_set(SystemError, strerror(errno));
+		diag_set(SystemError, "connect");
 		close(fd);
 		return -1;
 	}
@@ -621,7 +616,7 @@ log_syslog_init(struct log *log, const char *init_str)
 	if (log->fd < 0) {
 		diag_log();
 		/* syslog indent is freed in atexit(). */
-		diag_set(SystemError, "syslog logger: %s", strerror(errno));
+		diag_set(SystemError, "syslog logger");
 		return -1;
 	}
 	return 0;
@@ -1232,7 +1227,7 @@ log_destroy(struct log *log)
 	fiber_cond_destroy(&log->rotate_cond);
 }
 
-static inline int
+int
 log_vsay(struct log *log, int level, const char *filename, int line,
 	 const char *error, const char *format, va_list ap)
 {
@@ -1263,16 +1258,5 @@ log_vsay(struct log *log, int level, const char *filename, int line,
 		unreachable();
 	}
 	errno = errsv; /* Preserve the errno. */
-	return total;
-}
-
-int
-log_say(struct log *log, int level, const char *filename, int line,
-	const char *error, const char *format, ...)
-{
-	va_list ap;
-	va_start(ap, format);
-	int total = log_vsay(log, level, filename, line, error, format, ap);
-	va_end(ap);
 	return total;
 }

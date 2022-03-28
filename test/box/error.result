@@ -449,6 +449,16 @@ t;
  |   228: box.error.SYNC_QUEUE_FOREIGN
  |   229: box.error.UNABLE_TO_PROCESS_IN_STREAM
  |   230: box.error.UNABLE_TO_PROCESS_OUT_OF_STREAM
+ |   231: box.error.TRANSACTION_TIMEOUT
+ |   232: box.error.ACTIVE_TIMER
+ |   233: box.error.TUPLE_FIELD_COUNT_LIMIT
+ |   234: box.error.CREATE_CONSTRAINT
+ |   235: box.error.FIELD_CONSTRAINT_FAILED
+ |   236: box.error.TUPLE_CONSTRAINT_FAILED
+ |   237: box.error.CREATE_FOREIGN_KEY
+ |   238: box.error.FOREIGN_KEY_INTEGRITY
+ |   239: box.error.FIELD_FOREIGN_KEY_FAILED
+ |   240: box.error.COMPLEX_FOREIGN_KEY_FAILED
  | ...
 
 test_run:cmd("setopt delimiter ''");
@@ -897,13 +907,13 @@ e:unpack()
  |   - file: '[string "e = box.error.new({type = ''TestType''}) "]'
  |     line: 1
  | ...
--- Try too long type name.
+-- Try long type name.
 e = box.error.new({type = string.rep('a', 128)})
  | ---
  | ...
 #e.type
  | ---
- | - 63
+ | - 128
  | ...
 
 -- gh-4887: accessing 'prev' member also refs it so that after

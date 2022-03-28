@@ -27,7 +27,9 @@ help()
 ...
 cfg_filter(box.cfg)
 ---
-- - - background
+- - - audit_nonblock
+    - true
+  - - background
     - false
   - - checkpoint_count
     - 2
@@ -94,9 +96,11 @@ cfg_filter(box.cfg)
   - - replication_sync_timeout
     - <hidden>
   - - replication_synchro_quorum
-    - 1
+    - N / 2 + 1
   - - replication_synchro_timeout
     - 5
+  - - replication_threads
+    - 1
   - - replication_timeout
     - 1
   - - slab_alloc_factor
@@ -109,10 +113,14 @@ cfg_filter(box.cfg)
     - true
   - - too_long_threshold
     - 0.5
+  - - txn_timeout
+    - 3153600000
   - - vinyl_bloom_fpr
     - 0.05
   - - vinyl_cache
     - 134217728
+  - - vinyl_defer_deletes
+    - false
   - - vinyl_dir
     - <hidden>
   - - vinyl_max_tuple_size

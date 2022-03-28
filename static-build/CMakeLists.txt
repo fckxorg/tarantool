@@ -20,8 +20,6 @@ set(NCURSES_VERSION 6.2)
 set(NCURSES_HASH e812da327b1c2214ac1aed440ea3ae8d)
 set(READLINE_VERSION 8.0)
 set(READLINE_HASH 7e6c1f16aee3244a69aba6e438295ca3)
-set(UNWIND_VERSION 1.3-rc1)
-set(UNWIND_HASH f09b670de5db6430a3de666e6aed60e3)
 
 # Pass -isysroot=<SDK_PATH> option on Mac OS to a preprocessor and a C
 # compiler to find header files installed with an SDK.
@@ -94,7 +92,7 @@ ExternalProject_Add(icu
 # ZLIB
 #
 ExternalProject_Add(zlib
-    URL https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+    URL https://packages.hb.bizmrg.com/third_party/zlib-${ZLIB_VERSION}.tar.gz
     URL_MD5 ${ZLIB_HASH}
     CONFIGURE_COMMAND env
         CC=${CMAKE_C_COMPILER}
@@ -203,77 +201,9 @@ else()
     )
 endif()
 
-#
-# Unwind
-#
-if (APPLE)
-    # On macOS libunwind is a part of MacOSX.sdk
-    # So we need to find library and header and
-    # copy it locally
-    find_path(UNWIND_INCLUDE_DIR libunwind.h)
-    find_library(UNWIND_LIBRARY libunwind.dylib
-        PATH_SUFFIXES system
-    )
-
-    set(UNWIND_INSTALL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/unwind-prefix")
-
-    set(UNWIND_DEPENDENCIES)
-
-    if (UNWIND_INCLUDE_DIR AND UNWIND_LIBRARY)
-        add_custom_command(
-            OUTPUT "${UNWIND_INSTALL_PREFIX}/include/unwind.h"
-            OUTPUT "${UNWIND_INSTALL_PREFIX}/include/libunwind.h"
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "${UNWIND_INSTALL_PREFIX}/include"
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "${UNWIND_INCLUDE_DIR}/libunwind.h"
-                "${UNWIND_INCLUDE_DIR}/unwind.h"
-                "${UNWIND_INSTALL_PREFIX}/include/"
-        )
-        add_custom_command(
-            OUTPUT "${UNWIND_INSTALL_PREFIX}/lib/libunwind.dylib"
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "${UNWIND_INSTALL_PREFIX}/lib"
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "${UNWIND_LIBRARY}"
-                "${UNWIND_INSTALL_PREFIX}/lib/"
-        )
-        set(UNWIND_DEPENDENCIES
-            ${UNWIND_DEPENDENCIES}
-            "${UNWIND_INSTALL_PREFIX}/lib/libunwind.dylib"
-            "${UNWIND_INSTALL_PREFIX}/include/libunwind.h"
-        )
-    else()
-        message(STATUS "Unwind not found")
-    endif()
-
-    add_custom_target(unwind DEPENDS ${UNWIND_DEPENDENCIES})
-    # This is a hack for further getting install directory of library
-    # by ExternalProject_Get_Property
-    set_target_properties(unwind
-        PROPERTIES _EP_INSTALL_DIR ${UNWIND_INSTALL_PREFIX}
-    )
-else()
-    ExternalProject_Add(unwind
-        URL https://download.savannah.nongnu.org/releases/libunwind/libunwind-${UNWIND_VERSION}.tar.gz
-        URL_MD5 ${UNWIND_HASH}
-        CONFIGURE_COMMAND <SOURCE_DIR>/configure
-            CC=${CMAKE_C_COMPILER}
-            CXX=${CMAKE_CXX_COMPILER}
-            CFLAGS=${DEPENDENCY_CFLAGS}
-            CPPFLAGS=${DEPENDENCY_CPPFLAGS}
-            LDFLAGS=${DEPENDENCY_LDFLAGS}
-            --prefix=<INSTALL_DIR>
-            --disable-shared
-            --enable-static
-            --disable-minidebuginfo # to prevent linking with liblzma
-        STEP_TARGETS download
-    )
-endif()
-
 # Get install directories of builded libraries for building
 # tarantool with custon CMAKE_PREFIX_PATH
-foreach(PROJ openssl icu zlib ncurses readline iconv unwind)
+foreach(PROJ openssl icu zlib ncurses readline iconv)
     ExternalProject_Get_Property(${PROJ} install_dir)
     set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH}:${install_dir})
     set(TARANTOOL_DEPENDS ${PROJ} ${TARANTOOL_DEPENDS})
@@ -290,7 +220,6 @@ ExternalProject_Add(tarantool
         -DCMAKE_INSTALL_LOCALSTATEDIR=<INSTALL_DIR>/var
         -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
         -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
-        -DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=FALSE
         -DOPENSSL_USE_STATIC_LIBS=TRUE
         -DBUILD_STATIC=TRUE
         -DENABLE_DIST=TRUE
@@ -303,25 +232,31 @@ ExternalProject_Add(tarantool
 )
 
 enable_testing()
-ExternalProject_Get_Property(tarantool binary_dir)
-SET(TARANTOOL_BINARY_DIR ${binary_dir})
+ExternalProject_Get_Property(tarantool install_dir)
+SET(TARANTOOL_BINARY ${install_dir}/bin/tarantool)
 
 add_test(
     NAME check-dependencies
     COMMAND ${CMAKE_COMMAND}
-        -D FILE=${TARANTOOL_BINARY_DIR}/src/tarantool
+        -D FILE=${TARANTOOL_BINARY}
         -P CheckDependencies.cmake
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
 )
 
 add_test(
     NAME check-exports
-    COMMAND ${TARANTOOL_BINARY_DIR}/src/tarantool
+    COMMAND ${TARANTOOL_BINARY}
             ${CMAKE_CURRENT_SOURCE_DIR}/test/static-build/exports.test.lua
 )
 
 add_test(
     NAME check-traceback
-    COMMAND ${TARANTOOL_BINARY_DIR}/src/tarantool
+    COMMAND ${TARANTOOL_BINARY}
             ${CMAKE_CURRENT_SOURCE_DIR}/test/static-build/traceback.test.lua
+)
+
+add_test(
+    NAME check-luarocks
+    COMMAND ${TARANTOOL_BINARY}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/static-build/luarocks.test.lua
 )

@@ -172,18 +172,13 @@ struct sql_context {
 	Mem *pOut;		/* The return value is stored here */
 	/* A pointer to function implementation. */
 	struct func *func;
-	Mem *pMem;		/* Memory cell used to store aggregate context */
-	Vdbe *pVdbe;		/* The VM that owns this context */
-	/** Instruction number of OP_BuiltinFunction0. */
-	int iOp;
+	struct coll *coll;
 	/*
 	 * True, if an error occurred during the execution of the
 	 * function.
 	 */
 	bool is_aborted;
 	u8 skipFlag;		/* Skip accumulator loading if true */
-	u8 argc;		/* Number of arguments */
-	sql_value *argv[1];	/* Argument set */
 };
 
 /* A bitfield type for use inside of structures.  Always follow with :N where
@@ -267,7 +262,6 @@ struct Vdbe {
 
 	Op *aOp;		/* Space to hold the virtual machine's program */
 	Mem *aMem;		/* The memory locations */
-	Mem **apArg;		/* Arguments to currently executing user function */
 	/** SQL metadata for DML/DQL queries. */
 	struct sql_column_metadata *metadata;
 	Mem *pResultSet;	/* Pointer to an array of results */

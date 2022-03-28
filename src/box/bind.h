@@ -41,8 +41,9 @@ extern "C" {
 
 #include "msgpuck.h"
 #include "decimal.h"
-#include "uuid/tt_uuid.h"
 #include "mp_extension_types.h"
+#include "tt_uuid.h"
+#include "datetime.h"
 
 struct sql_stmt;
 
@@ -74,6 +75,8 @@ struct sql_bind {
 		const char *s;
 		struct tt_uuid uuid;
 		decimal_t dec;
+		/** DATETIME value. */
+		struct datetime dt;
 	};
 };
 
